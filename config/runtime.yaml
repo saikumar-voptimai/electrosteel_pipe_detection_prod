@@ -1,5 +1,5 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: "tests/videos/va_imaging_test.avi"                     # camera index or path to video
+video_source: "gige"                # camera index or path to video
 model_path: "models/yolo/best_nano_dataset0To5.pt"
 tracker_yaml: "config/bytetrack.yaml"
 

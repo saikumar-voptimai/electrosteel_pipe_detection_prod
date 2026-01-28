@@ -21,19 +21,34 @@ class Capture:
     Opens the video capture source.
     """
     if isinstance(self.source, str) and self.source.startswith("gige"):
-      logger.info("Opening video source GStreamer: %s", self.source)
+      logger.info("Opening GigE camera via GStreamer Aravis: %s", self.source)
+
       pipeline = (
-          "arvissrc ! "
-          "video/x-raw,format=BGR ! "
+          "aravissrc ! "
           "videoconvert ! "
-          "appsink drop=true max-buffers=1"
+          "video/x-raw,format=BGR ! "
+          "appsink drop=true max-buffers=1 sync=false"
       )
+
       self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+      if not self._cap.isOpened():
+        raise RuntimeError(
+          f"Cannot open GigE camera via GStreamer: {self.source}"
+          "Check: gst-inspect-1.0 aravissrc, GST_PLUGIN_PATH, and camera connectivity.")
+      # Warmup
+      for _ in range(self.warmup_frames):
+          self._cap.read()
+
     else:
       self._cap = cv2.VideoCapture(self.source)
       logger.info("Opening video source: %s", self.source)
       if not self._cap.isOpened():
         raise RuntimeError(f"Cannot open video source: {self.source}")
+      
+      # Warmup
+      for _ in range(self.warmup_frames):
+          self._cap.read()
+          
 
     try:
       fps = self._cap.get(cv2.CAP_PROP_FPS)
