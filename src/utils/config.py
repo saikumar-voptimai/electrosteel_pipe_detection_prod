@@ -34,6 +34,8 @@ class RuntimeCfg:
     db_path: str
     latest_jpg_path: str
     publish_fps: int
+    publish_imgsz: int
+    run_headless: bool
     db_flush_interval_s: float
 
     log_level: str
@@ -95,6 +97,8 @@ def load_config(runtime_path: str, rois_path: str, plc_path: str) -> AppCfg:
         db_path=str(r.get("db_path", "var/pipes.db")),
         latest_jpg_path=str(r.get("latest_jpg_path", "var/latest.jpg")),
         publish_fps=int(r.get("publish_fps", 5)),
+        publish_imgsz=int(r.get("publish_imgsz", 960)),
+        run_headless=bool(r.get("run_headless", False)),
         db_flush_interval_s=float(r.get("db_flush_interval_s", 1.0)),
         log_level=str(r.get("log_level", "INFO")),
         log_path=(str(r["log_path"]) if r.get("log_path") else None),

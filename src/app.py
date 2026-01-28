@@ -10,6 +10,7 @@ import cv2
 from dataclasses import dataclass
 
 from plc.client import PLCClient
+from vision.types import BBox, TrackDet
 from utils.config import AppCfg
 from utils.timing import RateLimiter
 
@@ -26,6 +27,7 @@ from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSource, VisionGateSource
 from utils.logging import setup_logging
+from utils.runtime import resize_for_inference
 
 logger = logging.getLogger("pipe_detect")
 
@@ -58,6 +60,8 @@ class App:
       self.cfg.runtime.max_fps,
       self.cfg.runtime.frame_skip,
       self.cfg.runtime.publish_fps,
+      self.cfg.runtime.publish_imgsz,
+      self.cfg.runtime.run_headless,
     )
 
     # Validate ROIs
@@ -121,26 +125,59 @@ class App:
         if item is None:
           logger.warning("No frame captured, retrying...")
           continue
-        frame, ts = item
+        frame_orig, ts = item
+        orig_h, orig_w = frame_orig.shape[:2]
 
-        logger.debug("Frame captured | idx=%d | ts=%.3f | shape=%s", frame_idx, ts, getattr(frame, "shape", None))
+        frame_scaled = resize_for_inference(frame_orig, target_width=self.cfg.runtime.imgsz)
+        scaled_h, scaled_w = frame_scaled.shape[:2]
+
+        # Coordinate mapping:
+        # - ROIs are stored in ORIGINAL frame pixel coordinates (from ROI redraw wizard)
+        # - Inference runs on frame_scaled
+        # - tracker.infer() returns bboxes in SCALED coordinates
+        # Therefore, to map detections back to original coords, multiply by (orig/scaled).
+        # For drawing ROIs on the scaled frame, multiply ROI points by (scaled/orig).
+        scale_x = scaled_w / orig_w
+        scale_y = scaled_h / orig_h
+        inv_scale_x = orig_w / scaled_w
+        inv_scale_y = orig_h / scaled_h
+
+        logger.debug("Frame captured | idx=%d | ts=%.3f | shape=%s", frame_idx, ts, getattr(frame_scaled, "shape", None))
 
         # Skip frames if configured
         if self.cfg.runtime.frame_skip > 0 and (frame_idx % (self.cfg.runtime.frame_skip + 1) != 0):
           frame_idx += 1
           continue
 
-        dets = tracker.infer(frame)
+        dets = tracker.infer(frame_scaled)
+        dets_orig = []
+        for d in dets:
+          if d.track_id is None:
+              continue
+
+          x1 = d.bbox.x1 * inv_scale_x
+          y1 = d.bbox.y1 * inv_scale_y
+          x2 = d.bbox.x2 * inv_scale_x
+          y2 = d.bbox.y2 * inv_scale_y
+
+          dets_orig.append(
+              TrackDet(
+                  cls_name=d.cls_name,
+                  conf=d.conf,
+                  track_id=d.track_id,
+                  bbox=BBox(x1, y1, x2, y2),
+              )
+          )
         logger.debug("Inference results | idx=%d | dets=%d", frame_idx, len(dets))
 
         # Update gate FSM
-        gate_events = gate_fsm.update(frame=frame, dets=dets)
+        gate_events = gate_fsm.update(frame=frame_orig, dets=dets_orig)
         for event in gate_events:
           logger.info(f"Gate opened: {event.gate_name} at {event.t_open}")
           repo.insert_event("gate_open", None, f"{event.gate_name}@{event.t_open:.3f}")
         
         # Update pipe FSM
-        updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets)
+        updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
         logger.debug("Pipe FSM updated | idx=%d | updated=%d | events=%d", frame_idx, len(updated_pipes), len(pipe_events))
 
         # Handle pipe events + optional extra PLC tag for debugging
@@ -176,13 +213,13 @@ class App:
           })
         
         # Draw and publish latest frame
-        vis = draw_overlay(frame.copy(), rois, dets)
-
-        cv2.imshow("Pipe Detection = Live", vis)
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:   # ESC key
-          logger.info("Quit signal received, shutting down...")
-          break
+        vis = draw_overlay(frame_scaled.copy(), rois, dets, ts, scale_x=scale_x, scale_y=scale_y)
+        if not self.cfg.runtime.run_headless:
+          cv2.imshow("Pipe Detection = Live", vis)
+          key = cv2.waitKey(1) & 0xFF
+          if key == 27:   # ESC key
+            logger.info("Quit signal received, shutting down...")
+            break
         publisher.publish(vis)
         
         # Commit DB periodically

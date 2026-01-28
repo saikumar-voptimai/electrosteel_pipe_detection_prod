@@ -14,7 +14,23 @@ from vision.types import TrackDet
 
 logger = logging.getLogger(__name__)
 
-def draw_overlay(frame: np.ndarray, rois: ROIManager, dets: List[TrackDet]) -> np.ndarray:
+from datetime import datetime
+import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now_str(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
+
+def scale_polygon(points, sx, sy):
+    return [(int(x * sx), int(y * sy)) for (x, y) in points]
+
+def draw_overlay(frame: np.ndarray, 
+                 rois: ROIManager, 
+                 dets: List[TrackDet], 
+                 ts: float,
+                 scale_x: float = 1.0,
+                 scale_y: float = 1.0) -> np.ndarray:
   """
   Draw ROIs and tracking boxes on the frame.
   """
@@ -28,12 +44,25 @@ def draw_overlay(frame: np.ndarray, rois: ROIManager, dets: List[TrackDet]) -> n
   ]:
     if name not in rois.rois:
       continue
-    pts = np.array(rois.rois[name], dtype=np.int32)
-    cv2.polylines(out, [pts], True, (0, 255, 255), 2)
-    cv2.putText(out, name, (int(pts[0][0]), int(pts[0][1])), 
+    pts_orig = rois.rois[name]
+    pts_scaled = scale_polygon(pts_orig, scale_x, scale_y)
+    
+    pts_np = np.array(pts_scaled, dtype=np.int32)
+    cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)
+    cv2.putText(out, name, (int(pts_np[0][0]), int(pts_np[0][1])), 
                 cv2.FONT_HERSHEY_SIMPLEX, 
                 0.6, (0,255,255), 2)
   
+  cv2.putText(
+    out,
+    ist_now_str(ts),
+    (int(0.9 * out.shape[1]), int(0.95 * out.shape[0])),
+    cv2.FONT_HERSHEY_SIMPLEX,
+    0.7,
+    (255, 255, 255),
+    2,
+  )
+
   # Draw Detections/Tracks
   for d in dets:
     x1, y1, x2, y2 = map(int, [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2])

@@ -20,10 +20,20 @@ class Capture:
     """
     Opens the video capture source.
     """
-    logger.info("Opening video source: %s", self.source)
-    self._cap = cv2.VideoCapture(self.source)
-    if not self._cap.isOpened():
-      raise RuntimeError(f"Cannot open video source: {self.source}")
+    if isinstance(self.source, str) and self.source.startswith("gige"):
+      logger.info("Opening video source GStreamer: %s", self.source)
+      pipeline = (
+          "arvissrc ! "
+          "video/x-raw,format=BGR ! "
+          "videoconvert ! "
+          "appsink drop=true max-buffers=1"
+      )
+      self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    else:
+      self._cap = cv2.VideoCapture(self.source)
+      logger.info("Opening video source: %s", self.source)
+      if not self._cap.isOpened():
+        raise RuntimeError(f"Cannot open video source: {self.source}")
 
     try:
       fps = self._cap.get(cv2.CAP_PROP_FPS)

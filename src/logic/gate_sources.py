@@ -101,6 +101,8 @@ class GeometryGateSource(GateStatusSource):
     # Human occlusion guard: Human in safety ROI OR overlaps gate bbox or gate closed roi
     #TODO: If human overlaps defined roi_gate1_closed or roi_gate2_closed -> closed
     for d in dets:
+      if d.cls_name == "human":
+        logger.info(f"Human detected | gate={gate_name} | conf={d.conf:.3f}")
       if d.cls_name.lower() not in ("human", "humans"):
         continue
       hb = d.bbox
