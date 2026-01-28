@@ -1,7 +1,7 @@
 # This file sets the Daheng VA-Imaging GigE camera parameters
 # THe camera currently uses GStream and Aravis drivers
 camera:
-  id: "Daheng-Imaging_"
+  id: "Daheng Imaging-MER2-630-18GC-P-FBJ24120608"
   width: 960
   height: 640 # Match these to the runtime publish_imgsz aspect ratio
   fps: 8

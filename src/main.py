@@ -31,6 +31,10 @@ def main() -> None:
     raise SystemExit(f"Missing {args.rois} Run with --redraw to create ROIs.")
   
   cfg = load_config(args.runtime, args.rois, args.plc, args.camera)
+  if not cfg.runtime.run_headless:
+    # Only set if we aren't in headless mode
+    import os
+    os.environ["QT_QPA_PLATFORM"] = "wayland"
   App(cfg).run()
 
 if __name__ == "__main__":

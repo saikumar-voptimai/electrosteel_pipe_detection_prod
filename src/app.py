@@ -255,6 +255,7 @@ class App:
         pass
       try:
         capture.close()
+        capture._cap.release()
       except Exception:
         pass
       cv2.destroyAllWindows()
