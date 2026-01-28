@@ -76,7 +76,7 @@ class App:
     plc = create_plc(self.cfg.plc)
 
     rois = ROIManager(self.cfg.rois)
-    capture = Capture(source=self.cfg.runtime.video_source)
+    capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
 
     tracker = YoloByteTrack(

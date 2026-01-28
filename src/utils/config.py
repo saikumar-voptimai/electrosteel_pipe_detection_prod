@@ -7,6 +7,17 @@ import yaml
 Point = Tuple[int, int]
 Polygon = List[Point]
 
+@dataclass(frozen=True)
+class CameraCfg:
+    id: int | str
+    width: int
+    height: int
+    fps: int
+    exposure_us: int
+    gain_db: int
+    auto_exposure: bool
+    auto_gain: bool
+
 
 @dataclass(frozen=True)
 class GateRuntimeCfg:
@@ -63,6 +74,7 @@ class AppCfg:
     runtime: RuntimeCfg
     rois: Dict[str, Polygon]
     plc: PlcCfg
+    camera_cfg: CameraCfg | None
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:
@@ -70,10 +82,31 @@ def _load_yaml(path: str) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def load_config(runtime_path: str, rois_path: str, plc_path: str) -> AppCfg:
+def load_config(
+    runtime_path: str,
+    rois_path: str,
+    plc_path: str,
+    camera_cfg_path: str = "config/camera.yaml",
+) -> AppCfg:
     r = _load_yaml(runtime_path)
     rois_raw = _load_yaml(rois_path)
     p = _load_yaml(plc_path)
+    c_raw = _load_yaml(camera_cfg_path)
+
+    cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
+    camera_cfg: CameraCfg | None = None
+    # Camera config is optional unless runtime.video_source is "gige".
+    if cam:
+        camera_cfg = CameraCfg(
+            id=cam.get("id", 0),
+            width=int(cam.get("width", 960)),
+            height=int(cam.get("height", 640)),
+            fps=int(cam.get("fps", 8)),
+            exposure_us=int(cam.get("exposure_us", 15000)),
+            gain_db=int(cam.get("gain_db", 5)),
+            auto_exposure=bool(cam.get("auto_exposure", False)),
+            auto_gain=bool(cam.get("auto_gain", False)),
+        )
 
     gate_raw = r.get("gate", {}) or {}
     gate = GateRuntimeCfg(
@@ -121,4 +154,4 @@ def load_config(runtime_path: str, rois_path: str, plc_path: str) -> AppCfg:
     for name, pts in (rois_raw or {}).items():
         rois[name] = [(int(x), int(y)) for (x, y) in pts]
 
-    return AppCfg(runtime=runtime, rois=rois, plc=plc)
+    return AppCfg(runtime=runtime, rois=rois, plc=plc, camera_cfg=camera_cfg)

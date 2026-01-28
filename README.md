@@ -3,6 +3,12 @@
 
 Runs YOLO + ByteTrack on a live camera feed (or a video file), detects/ tracks pipes, applies ROI-based business logic (origin, loadcell, gate), writes results to a local SQLite database, and publishes a continuously-updated annotated frame for a simple dashboard.
 
+Key sizing concepts (kept intentionally separate):
+
+- **Capture size**: whatever the camera/video provides (or, for GigE, what you request in `config/camera.yaml`). ROIs in `config/rois.yaml` are defined in this coordinate space.
+- **Inference `imgsz`** (in `config/runtime.yaml`): passed to Ultralytics YOLO; YOLO resizes internally for inference but returns boxes back in the original input frame coordinates.
+- **Publish `publish_imgsz`** (in `config/runtime.yaml`): affects only the rendered/published visualization frame (`var/latest.jpg` and the OpenCV window). It does not affect business logic.
+
 This README is ordered intentionally:
 
 1) **How to run on a Raspberry Pi with a real camera**
@@ -83,6 +89,10 @@ Example for a USB camera:
 ```yaml
 video_source: 0
 ```
+
+### Configure Daheng GigE (Aravis/GStreamer)
+
+If `video_source: "gige"`, camera settings are taken from `config/camera.yaml` (camera name/id, width/height/fps, exposure, gain, auto flags). The GigE pipeline in `src/camera/capture.py` uses these values.
 
 Logging controls (already present in `config/runtime.yaml`):
 

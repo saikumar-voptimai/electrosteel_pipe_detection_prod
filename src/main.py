@@ -12,6 +12,7 @@ def parse_args() -> argparse.Namespace:
   p.add_argument("--runtime", default="config/runtime.yaml", help="Path to runtime config YAML.")
   p.add_argument("--rois", default="config/rois.yaml", help="Path to ROIs config YAML.")
   p.add_argument("--plc", default="config/plc.yaml", help="Path to PLC config YAML.")
+  p.add_argument("--camera", default="config/camera.yaml", help="Path to camera config YAML (GigE/Aravis).")
   p.add_argument("--redraw", action="store_true", help="Launch ROI redraw wizard instead of main app.")
   p.add_argument("--video-source", default=None, help="Only used with --redraw")
   return p.parse_args()
@@ -29,7 +30,7 @@ def main() -> None:
   if not Path(args.rois).exists():
     raise SystemExit(f"Missing {args.rois} Run with --redraw to create ROIs.")
   
-  cfg = load_config(args.runtime, args.rois, args.plc)
+  cfg = load_config(args.runtime, args.rois, args.plc, args.camera)
   App(cfg).run()
 
 if __name__ == "__main__":

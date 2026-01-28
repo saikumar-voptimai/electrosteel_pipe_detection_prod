@@ -1,21 +1,24 @@
 from __future__ import annotations
 import time
 from dataclasses import dataclass
+from dataclasses import field
 import cv2
 import numpy as np
 from typing import Tuple
 import logging
 import subprocess
+from utils.config import CameraCfg
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class Capture:
   source: int | str
+  camera_cfg: CameraCfg | None = None
   reconnect_sleep_s: float = 1.0
   warmup_frames: int = 10
 
-  _cap: cv2.VideoCapture | None = None
+  _cap: cv2.VideoCapture | None = field(default=None, init=False)
 
   def open(self) -> None:
     """
@@ -23,6 +26,12 @@ class Capture:
     """
     if isinstance(self.source, str) and self.source.startswith("gige"):
       logger.info("Opening GigE camera via GStreamer Aravis: %s", self.source)
+
+      if self.camera_cfg is None:
+        raise RuntimeError(
+          "video_source is 'gige' but no camera_cfg was provided. "
+          "Check config/camera.yaml and main.py --camera argument."
+        )
 
       # Release existing camera uses if any with pkill
       # Note: these tools are typically available on Linux; make this best-effort.
@@ -49,7 +58,13 @@ class Capture:
         logger.debug("arv-tool-0.10 not found; skipping camera list")
       
       pipeline = (
-          "aravissrc ! "
+          f"aravissrc camera-name={self.camera_cfg.id} ! "
+          f"exposure={self.camera_cfg.exposure_us} ! "
+          f"exposure-auto={'true' if self.camera_cfg.auto_exposure else 'false'} ! "
+          f"gain={self.camera_cfg.gain_db} ! "
+          f"gain-auto={'true' if self.camera_cfg.auto_gain else 'false'} ! "
+          f"packet-size=1500 ! "
+          f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1 ! "
           "bayer2rgb ! "
           "videoconvert ! "
           "video/x-raw,format=BGR ! "
