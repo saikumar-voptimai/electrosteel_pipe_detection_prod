@@ -1,0 +1,34 @@
+# fps, conf thresholds, debounce frames, logging
+video_source: "tests/videos/va_imaging_test.avi"                     # camera index or path to video
+model_path: "models/yolo/best_nano_dataset0To5.pt"
+tracker_yaml: "config/bytetrack.yaml"
+
+imgsz: 640
+conf: 0.25
+iou: 0.5
+
+max_fps: 15
+frame_skip: 0                       # 0 = process every frame, 1 = every alternate, etc.
+
+log_level: "DEBUG"                   # DEBUG|INFO|WARNING|ERROR
+log_path: "var/pipe_detect.log"     # e.g. "var/pipe_detect.log" (null = console only)
+
+db_path: "var/pipes.db"
+latest_jpg_path: "var/latest.jpg"
+publish_fps: 5                      # UI refresh source
+
+db_flush_interval_s: 1.0            # batch DB commits for Pi
+
+origin_confirm_frames: 2
+loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
+loadcell_exit_confirm_frames: 2
+stale_track_frames: 45
+rearm_empty_frames: 10
+
+gate:
+  source_default: "geometry"        # plc | geometry | vision
+  stable_frames: 3
+  min_conf: 0.25
+  max_area_ratio_vs_closed: 0.85
+  max_w_over_h: 0.90
+  human_iou_occlusion: 0.10

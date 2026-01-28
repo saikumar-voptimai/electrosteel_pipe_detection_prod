@@ -1,0 +1,23 @@
+# plc mode (modbus/gpio/openplc), tags, pulse widths
+mode: "mock"   # "mock" | "modbus" | "gpio" | "openplc"
+
+# event tags
+tags:
+  caster_5_new: "caster_5_new"
+  gate1_open: "gate1_open"
+  gate2_open: "gate2_open"
+  pipe_on_loadcell: "pipe_on_loadcell"
+
+pulse_ms: 300
+
+# Modbus example (OpenPLC)
+modbus:
+  host: "192.168.1.100"
+  port: 502
+  coils:
+    caster_5_new: 10
+    gate1_open: 11
+    gate2_open: 12
+    pipe_on_loadcell: 13
+
+
