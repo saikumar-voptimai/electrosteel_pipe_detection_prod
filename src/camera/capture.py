@@ -58,16 +58,10 @@ class Capture:
         logger.debug("arv-tool-0.10 not found; skipping camera list")
       
       pipeline = (
-          f"aravissrc camera-name={self.camera_cfg.id} ! "
-          f"exposure={self.camera_cfg.exposure_us} ! "
-          f"exposure-auto={'true' if self.camera_cfg.auto_exposure else 'false'} ! "
-          f"gain={self.camera_cfg.gain_db} ! "
-          f"gain-auto={'true' if self.camera_cfg.auto_gain else 'false'} ! "
-          f"packet-size=1500 ! "
-          f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1 ! "
+          f"aravissrc ! "
           "bayer2rgb ! "
           "videoconvert ! "
-          "video/x-raw,format=BGR ! "
+          f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1,format=BGR ! "
           "appsink drop=true max-buffers=1 sync=false"
       )
 
