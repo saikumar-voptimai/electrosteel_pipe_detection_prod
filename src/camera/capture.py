@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from typing import Tuple
 import logging
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,33 @@ class Capture:
     if isinstance(self.source, str) and self.source.startswith("gige"):
       logger.info("Opening GigE camera via GStreamer Aravis: %s", self.source)
 
+      # Release existing camera uses if any with pkill
+      # Note: these tools are typically available on Linux; make this best-effort.
+      try:
+        subprocess.run(["pkill", "-f", "arv-viewer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        subprocess.run(["pkill", "-f", "arv-test"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+        subprocess.run(["pkill", "-f", "gst-launch-1.0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+      except FileNotFoundError:
+        logger.debug("Process cleanup tools not found; skipping pkill")
+
+      # List cameras and see "Daheng" exists in the output. Also log.
+      try:
+        output = subprocess.run(
+          ["arv-tool-0.10", "list"],
+          capture_output=True,
+          text=True,
+        )
+        if "daheng" in (output.stdout or "").lower():
+          logger.info("Daheng camera detected:\n%s", output.stdout)
+      except FileNotFoundError:
+        logger.debug("arv-tool-0.10 not found; skipping camera list")
+      
       pipeline = (
           "aravissrc ! "
+          "bayer2rgb ! "
           "videoconvert ! "
           "video/x-raw,format=BGR ! "
           "appsink drop=true max-buffers=1 sync=false"
@@ -35,19 +61,12 @@ class Capture:
         raise RuntimeError(
           f"Cannot open GigE camera via GStreamer: {self.source}"
           "Check: gst-inspect-1.0 aravissrc, GST_PLUGIN_PATH, and camera connectivity.")
-      # Warmup
-      for _ in range(self.warmup_frames):
-          self._cap.read()
 
     else:
       self._cap = cv2.VideoCapture(self.source)
       logger.info("Opening video source: %s", self.source)
       if not self._cap.isOpened():
         raise RuntimeError(f"Cannot open video source: {self.source}")
-      
-      # Warmup
-      for _ in range(self.warmup_frames):
-          self._cap.read()
           
 
     try:
@@ -58,8 +77,9 @@ class Capture:
       logger.info("Capture opened | fps=%.2f | size=%dx%d | frame_count=%s", fps, w, h, frames if frames > 0 else "?")
     except Exception:
       logger.debug("Could not read capture properties", exc_info=True)
-    # Warmup
-    for _ in range(self.warmup_frames):
+
+    # Warmup (single place to avoid skipping extra frames)
+    for _ in range(max(0, int(self.warmup_frames))):
       self._cap.read()
 
   def read(self) -> Tuple[np.ndarray, float] | None:
