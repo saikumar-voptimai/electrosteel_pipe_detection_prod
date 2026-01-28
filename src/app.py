@@ -52,7 +52,7 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | source=%s | model=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s",
+      "Starting app | source=%s | model=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s",
       self.cfg.runtime.video_source,
       self.cfg.runtime.model_path,
       self.cfg.runtime.db_path,
