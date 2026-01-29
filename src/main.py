@@ -21,9 +21,15 @@ def main() -> None:
   args = parse_args()
 
   if args.redraw:
-    video_source = 0 if args.video_source is None else args.video_source
+    if args.video_source is None:
+      # Default to whatever runtime.yaml is configured for (e.g. "gige")
+      import yaml
+      raw = yaml.safe_load(Path(args.runtime).read_text(encoding="utf-8")) or {}
+      video_source = raw.get("video_source", 0)
+    else:
+      video_source = args.video_source
     Path("config").mkdir(exist_ok=True)
-    run_roi_redraw(video_source=video_source, rois_path=args.rois)
+    run_roi_redraw(video_source=video_source, rois_path=args.rois, camera_cfg_path=args.camera)
     print(f"[OK] Saved ROIs to {args.rois}")
     return
   

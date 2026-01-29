@@ -29,6 +29,9 @@ class ROIWizardConfig:
   video_source: int | str = 0 # default to webcam
   rois_path: str = "config/rois.yaml"
   window_name: str = "ROI Redraw Wizard - q=quit, u=undo, n=next, c=clear, ENTER=submit"
+  # Optional override: if provided, the wizard will use this frame as the base image
+  # instead of opening the video_source. Useful for live GigE pipelines.
+  first_frame: Optional[np.ndarray] = None
   alpha_fill: float = 0.22
   edge_thickness: int = 4
   point_radius: int = 5
@@ -114,6 +117,9 @@ class ROIRedrawWizard:
     """
     Captures first usable frame from video source. Can skip ahead on 'n' key.
     """
+    if self.cfg.first_frame is not None:
+      return self.cfg.first_frame
+
     cap = cv2.VideoCapture(self.cfg.video_source)
     if not cap.isOpened():
       raise RuntimeError(f"Cannot open video source: {self.cfg.video_source}")

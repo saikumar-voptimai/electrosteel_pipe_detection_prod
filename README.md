@@ -200,6 +200,10 @@ From repo root:
 python src/main.py --redraw
 ```
 
+Notes:
+- If you do not pass `--video-source`, `--redraw` will use `video_source` from `config/runtime.yaml`.
+- If `video_source: "gige"`, the wizard will grab the first frame from the Daheng GigE pipeline using `config/camera.yaml`.
+
 To use a specific camera index:
 
 ```bash
