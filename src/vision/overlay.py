@@ -51,16 +51,16 @@ def draw_overlay(frame: np.ndarray,
     cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)
     cv2.putText(out, name, (int(pts_np[0][0])+5, int(pts_np[0][1])+5), 
                 cv2.FONT_HERSHEY_SIMPLEX, 
-                0.4, (0,255,255), 1)
+                1, (0,255,255), 2)
   
   cv2.putText(
     out,
     ist_now_str(ts),
     (int(0.5 * out.shape[1]), int(0.9 * out.shape[0])),
     cv2.FONT_HERSHEY_SIMPLEX,
-    0.5,
+    2,
     (255, 255, 255),
-    1,
+    2,
   )
 
   # Draw Detections/Tracks
@@ -73,7 +73,7 @@ def draw_overlay(frame: np.ndarray,
                 f"{d.cls_name}:{tid} {d.conf:.2f}", 
                 (x1, max(20, y1-5)),
                 cv2.FONT_HERSHEY_SIMPLEX, 
-                0.5, 
+                1.5, 
                 color, 
                 2)
   return out

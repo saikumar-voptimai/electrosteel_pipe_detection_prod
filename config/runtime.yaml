@@ -1,5 +1,5 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: "gige"        # camera index or path to video
+video_source: "tests/videos/va_imaging_test.avi"        # camera index or path to video
 model_path: "models/yolo/best_nano_dataset0To5.pt"
 tracker_yaml: "config/bytetrack.yaml"
 
@@ -16,7 +16,7 @@ log_path: "var/pipe_detect.log"     # e.g. "var/pipe_detect.log" (null = console
 db_path: "var/pipes.db"
 latest_jpg_path: "var/latest.jpg"
 publish_fps: 5                      # UI refresh source
-publish_imgsz: 960                  # max width/height of published image
+publish_imgsz: 1920                  # max width/height of published image
 db_flush_interval_s: 1.0            # batch DB commits for Pi
 run_headless: false                 # disable display window
 

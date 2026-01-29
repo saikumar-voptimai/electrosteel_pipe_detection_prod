@@ -119,6 +119,11 @@ class App:
 
     frame_idx = 0
 
+    window_name = "Pipe Detection = Live"
+    if not self.cfg.runtime.run_headless:
+      # Allow resizing the window on larger displays.
+      cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
     try:
       while True:
         item = capture.read()
@@ -212,10 +217,33 @@ class App:
             "reached_gate_zone": 1 if int(p.reached_gate_zone) else 0,
           })
         
-        # Draw and publish latest frame
-        vis = draw_overlay(frame_scaled.copy(), rois, dets, ts, scale_x=scale_x, scale_y=scale_y)
+        # Draw and publish latest frame (visualization sizing is separate from inference sizing)
+        vis_base = frame_orig
+        if int(self.cfg.runtime.publish_imgsz) > 0:
+          vis_base = resize_for_inference(frame_orig, target_width=int(self.cfg.runtime.publish_imgsz))
+
+        vis_h, vis_w = vis_base.shape[:2]
+        vis_scale_x = vis_w / float(orig_w)
+        vis_scale_y = vis_h / float(orig_h)
+
+        dets_vis = [
+          TrackDet(
+            cls_name=d.cls_name,
+            conf=d.conf,
+            track_id=d.track_id,
+            bbox=BBox(
+              d.bbox.x1 * vis_scale_x,
+              d.bbox.y1 * vis_scale_y,
+              d.bbox.x2 * vis_scale_x,
+              d.bbox.y2 * vis_scale_y,
+            ),
+          )
+          for d in dets_orig
+        ]
+
+        vis = draw_overlay(vis_base.copy(), rois, dets_vis, ts, scale_x=vis_scale_x, scale_y=vis_scale_y)
         if not self.cfg.runtime.run_headless:
-          cv2.imshow("Pipe Detection = Live", vis)
+          cv2.imshow(window_name, vis)
           key = cv2.waitKey(1) & 0xFF
           if key == 27:   # ESC key
             logger.info("Quit signal received, shutting down...")
