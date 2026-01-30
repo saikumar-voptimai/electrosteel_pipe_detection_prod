@@ -1,0 +1,15 @@
+enabled: true
+output_dir: scripts/video
+segment_minutes: 1
+gap_seconds: 300
+container: mp4
+fourcc: mp4v
+fps: 6
+frame_size: [960, 640]
+queue_size: 240
+drop_when_full: true
+filename_prefix: cam01
+timestamp_format: "%Y%m%d_%H%M%S"
+
+
+

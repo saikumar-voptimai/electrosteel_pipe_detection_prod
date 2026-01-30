@@ -29,6 +29,9 @@ from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSour
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
 
+from pathlib import Path
+from utils.video_recorder import SegmentedVideoRecorder
+
 logger = logging.getLogger("pipe_detect")
 
 #TODO: Use enums or constants for ROI names
@@ -78,6 +81,15 @@ class App:
     rois = ROIManager(self.cfg.rois)
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
+    # ---- Video recorder (non-blocking segmented recording) ----
+    project_root = Path.cwd()
+    recorder = None
+    rec_cfg = self.cfg.runtime.recording # RecordingCfg | None (from config loader)
+    if rec_cfg:
+      recorder = SegmentedVideoRecorder(rec_cfg, project_root=project_root)
+      recorder.start()
+    else:
+      logger.info("Video recording disabled")
 
     tracker = YoloByteTrack(
         model_path=self.cfg.runtime.model_path,
@@ -131,6 +143,7 @@ class App:
           logger.warning("No frame captured, retrying...")
           continue
         frame_orig, ts = item
+
         orig_h, orig_w = frame_orig.shape[:2]
 
         frame_scaled = resize_for_inference(frame_orig, target_width=self.cfg.runtime.imgsz)
@@ -173,6 +186,12 @@ class App:
                   bbox=BBox(x1, y1, x2, y2),
               )
           )
+        # ---- Record overlay at ORIGINAL resolution (recommended) ----
+        vis_record = draw_overlay(frame_orig.copy(), rois, dets_orig, ts, scale_x=1.0, scale_y=1.0)
+        if recorder:
+          recorder.push(vis_record, ts)
+
+
         logger.debug("Inference results | idx=%d | dets=%d", frame_idx, len(dets))
 
         # Update gate FSM
@@ -286,6 +305,11 @@ class App:
         capture._cap.release()
       except Exception:
         pass
+      if recorder:
+        try:
+          recorder.stop()
+        except Exception:
+          logger.exception("Recorder stop failed")
       cv2.destroyAllWindows()
       
   # Internal methods
