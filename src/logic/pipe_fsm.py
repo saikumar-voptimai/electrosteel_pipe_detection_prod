@@ -10,6 +10,7 @@ from logic.datatypes import PipeStats
 from logic.events import PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent
 from plc.client import PLCClient
 from vision.types import BBox, TrackDet
+from ui.formatting import fmt_ts
 
 logger = logging.getLogger(__name__)
   
@@ -58,7 +59,7 @@ class PipeFlowFSM:
     updated: List[PipeStats] = []
     events: List[object] = []
 
-    logger.debug("PipeFSM update | frame_idx=%d | ts=%.3f | dets=%d | tracks=%d", frame_idx, ts, len(dets), len(self.pipes))
+    logger.debug("PipeFSM update | frame_idx=%d | ts=%s | dets=%d | tracks=%d", frame_idx, fmt_ts(ts), len(dets), len(self.pipes))
 
     # Determine if loadcell ROI is empty (any pipe, not only eligible)
     any_pipe_in_loadcell = False
@@ -118,12 +119,14 @@ class PipeFlowFSM:
             p.origin = "caster"
             if p.t_origin is None:
               p.t_origin = ts
-              logger.info(f"Pipe {p.pipe_uid} origin confirmed as caster at {ts:.3f}")
+              logger.info(f"Pipe {p.pipe_uid} origin confirmed as caster at {fmt_ts(ts)} after {p.origin_hits} hits")
         else:
           # If it appears in exclusion ROIS first, mark as other
           if self.rois.contains("roi_left_origin", cx, cy) or self.rois.contains("roi_right_origin", cx, cy):
-            p.origin = "other"
-            logger.info("Pipe origin set to other | uid=%s | tid=%d", p.pipe_uid, tid)
+            p.origin_hits += 1
+            if p.origin_hits >= self.origin_confirm_frames:
+              p.origin = "other"
+              logger.info(f"Pipe origin set to other | uid={p.pipe_uid} | tid={tid} after {p.origin_hits} hits")
       
       # Confidence tracking
       p.conf_sum_full += d.conf
@@ -156,7 +159,7 @@ class PipeFlowFSM:
                 tracker_id=tid,
                 t_enter=ts
               ))
-              logger.info("Pipe entered loadcell | uid=%s | tid=%d | ts=%.3f", p.pipe_uid, tid, ts)
+              logger.info("Pipe entered loadcell | uid=%s | tid=%d | ts=%s", p.pipe_uid, tid, fmt_ts(ts))
         
         else:
           p.loadcell_hits = 0
@@ -174,7 +177,7 @@ class PipeFlowFSM:
               tracker_id=tid,
               t_exit=ts
             ))
-            logger.info("Pipe exited loadcell | uid=%s | tid=%d | ts=%.3f", p.pipe_uid, tid, ts)
+            logger.info("Pipe exited loadcell | uid=%s | tid=%d | ts=%s", p.pipe_uid, tid, fmt_ts(ts))
         # Pipe used to be tracked, entered loadcell, but now lost inside loadcell ROI
         else:
           p.loadcell_exit_misses = 0
@@ -197,7 +200,7 @@ class PipeFlowFSM:
           t_exit=ts
         ))
         updated.append(p)
-        logger.info("Pipe considered exited (stale) | uid=%s | tid=%d | ts=%.3f", p.pipe_uid, tid, ts)
+        logger.info("Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s", p.pipe_uid, tid, fmt_ts(ts))
       del self.pipes[tid]
     
     return updated, events

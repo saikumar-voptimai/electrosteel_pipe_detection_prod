@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 import time
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -12,20 +11,11 @@ if str(SRC_DIR) not in sys.path:
   sys.path.insert(0, str(SRC_DIR))
 
 from db.repo import SqliteRepo
+from ui.formatting import fmt_ts
 
 #TODO: should be in config
 DB_PATH = "var/pipes.db"
 FRAMEPATH = "var/latest.jpg"
-
-
-def fmt_ts(x) -> str:
-  if x is None:
-    return ""
-  try: 
-    return datetime.fromtimestamp(float(x)).strftime("%Y-%m-%d %H:%M:%S")
-  except Exception:
-    return ""
-
 st.set_page_config(layout="wide", page_title="Pipe Tracking Dashboard")
 st.title("Pipe Tracking Dashboard (Local)")
 
@@ -35,7 +25,7 @@ with st.sidebar:
   st.header("Controls")
   gate_source = st.selectbox("Gate source", ["geometry", "plc (not implemented)", "vision (not implemented)"])
   if st.button("Apply gate source"):
-    repo.setting("gate_source", gate_source)
+    repo.set_setting("gate_source", gate_source)
     st.success(f"Gate source set to {gate_source}")
 
   refresh_ms = st.slider("Auto-refresh interval (ms)", min_value=1000, max_value=10000, value=5000, step=1000)

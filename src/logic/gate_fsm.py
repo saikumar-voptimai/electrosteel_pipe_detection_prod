@@ -38,7 +38,7 @@ class GateFSM:
     now = time.time()
 
     for gate_name, gs in self.gates.items():
-      pos = self.source.get_position(gate_name, frame=frame, dets=dets)
+      pos, metrics = self.source.get_position(gate_name, frame=frame, dets=dets)
 
       logger.debug("Gate pos read | gate=%s | pos=%s | stable=%d", gate_name, pos, gs.stable)
 
@@ -66,4 +66,4 @@ class GateFSM:
         logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
         
       self.gates[gate_name] = gs
-    return events
+    return events, metrics

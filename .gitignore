@@ -14,3 +14,6 @@ var/pipes.db
 var/pipe_detect.log
 var/latest.jpg
 var/*
+
+# Tests
+tests/videos/*

@@ -1,9 +1,11 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: "gige"        # camera index or path to video
+video_source: "tests/videos/va_img_test4.avi"   # tests/videos/{video.mp4/.avi} | "gige"
 model_path: "models/yolo/best_nano_dataset0To5.pt"
 tracker_yaml: "config/bytetrack.yaml"
 
-imgsz: 640
+degbug_mode: false
+
+imgsz: 640 # Inference
 conf: 0.25
 iou: 0.5
 
@@ -16,13 +18,13 @@ log_path: "var/pipe_detect.log"     # e.g. "var/pipe_detect.log" (null = console
 db_path: "var/pipes.db"
 latest_jpg_path: "var/latest.jpg"
 publish_fps: 5                      # UI refresh source
-publish_imgsz: 1920                  # max width/height of published image
+publish_imgsz: 1920                 # max width/height of published image
 db_flush_interval_s: 1.0            # batch DB commits for Pi
 run_headless: false                 # disable display window
 
-origin_confirm_frames: 2
-loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
-loadcell_exit_confirm_frames: 2
+origin_confirm_frames: 5
+loadcell_enter_confirm_frames: 3    # you said first entry; 2 is safer
+loadcell_exit_confirm_frames: 3
 stale_track_frames: 45
 rearm_empty_frames: 10
 

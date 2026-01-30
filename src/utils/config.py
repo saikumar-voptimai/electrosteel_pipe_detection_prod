@@ -31,6 +31,8 @@ class GateRuntimeCfg:
 
 @dataclass(frozen=True)
 class RuntimeCfg:
+    degbug_mode: bool
+
     video_source: int | str
     model_path: str
     tracker_yaml: str
@@ -119,6 +121,7 @@ def load_config(
     )
 
     runtime = RuntimeCfg(
+        degbug_mode=bool(r.get("degbug_mode", False)),
         video_source=r.get("video_source", 0),
         model_path=r["model_path"],
         tracker_yaml=r["tracker_yaml"],

@@ -48,21 +48,22 @@ class PLCGateSource(GateStatusSource):
 
   open_tags: Dict[str, str]
 
-  def get_position(self, gate_name, frame=None, dets=None) -> str:
+  def get_position(self, gate_name, frame=None, dets=None) -> tuple[str, Dict[str, float]]:
     """
     Get gate position from PLC
     """
     tag = self.open_tags.get(gate_name)
+    metrics: Dict[str, float] = {}
     if not tag:
       logger.debug("PLC gate source missing tag | gate=%s", gate_name)
-      return "unknown"
+      return "unknown", metrics
     try:
       v = self.plc.read_bool(tag)
       logger.debug("PLC gate read | gate=%s | tag=%s | value=%s", gate_name, tag, v)
-      return "open" if v else "closed"
+      return "open" if v else "closed", metrics
     except Exception:
       logger.exception("PLC gate read failed | gate=%s | tag=%s", gate_name, tag)
-      return "unknown"
+      return "unknown", metrics
 
 
 @dataclass
@@ -76,24 +77,27 @@ class GeometryGateSource(GateStatusSource):
   max_w_over_h: float
   human_iou_occlusion: float
 
-  def get_position(self, gate_name: str, frame=None, dets: List[TrackDet] | None = None) -> str:
+  def get_position(self, gate_name: str, frame=None, dets: List[TrackDet] | None = None) -> tuple[str, dict[str, float]]:
     """
+    Get gate position from geometry analysis of detections.
+    Returns "open", "closed", or "unknown".
     """
+    metrics: Dict[str, float] = {}
     if dets is None:
-      return "unknown"
+      return "unknown", metrics
     
     gate_det = self._best_det(dets, gate_name, self.min_gate_conf)
 
     if gate_det is None:
       logger.debug("No gate detection | gate=%s | min_conf=%.3f", gate_name, self.min_gate_conf)
-      return "unknown"
+      return "unknown", metrics
     
     open_roi = f"roi_{gate_name}_open"
     closed_roi = f"roi_{gate_name}_closed"
 
     if open_roi not in self.rois.rois or closed_roi not in self.rois.rois:
       logger.debug("Missing gate ROIs | gate=%s | open_roi=%s | closed_roi=%s", gate_name, open_roi, closed_roi)
-      return "unknown"
+      return "unknown", metrics
     
     gate_bbox = gate_det.bbox
     cx, cy = gate_bbox.centroid()
@@ -110,21 +114,27 @@ class GeometryGateSource(GateStatusSource):
       #TODO: Use ENUMS or constants for ROI names
       if _iou(hb, gate_bbox) >= self.human_iou_occlusion:
         logger.debug("Gate occluded by human (iou) | gate=%s | iou=%.3f", gate_name, _iou(hb, gate_bbox))
-        return "unknown"
+        return "unknown", metrics
       if self.rois.contains(closed_roi, hx, hy):
         logger.debug("Gate occluded by human in closed ROI | gate=%s", gate_name)
-        return "unknown"
+        return "unknown", metrics 
       if self.rois.contains("roi_safety_critical", hx, hy) and _iou(hb, gate_bbox) >= self.human_iou_occlusion:
         logger.debug("Gate occluded by human in safety ROI | gate=%s", gate_name)
-        return "unknown"
-    
+        return "unknown", metrics
+      
+
     in_open = self.rois.contains(open_roi, cx, cy)
 
     closed_area = max(1.0, self.rois.roi(closed_roi).area())
     area_ratio = gate_bbox.area / closed_area
     w_over_h = gate_bbox.w / max(1.0, gate_bbox.h)
+    
+    metrics = {}
+    metrics["closed_area"] = closed_area
+    metrics["area_ratio"] = area_ratio
+    metrics["w_over_h"] = w_over_h
 
-    # Open if in open ROI AND gate looks tall/narro AND smaller area vs closed baseline
+    # Open if in open ROI AND gate looks tall/narrow AND smaller area vs closed baseline
     if in_open and (w_over_h < self.max_w_over_h) and (area_ratio < self.max_area_ratio_vs_closed):
       logger.debug(
         "Gate=open by geometry | gate=%s | conf=%.3f | in_open=%s | w/h=%.3f | area_ratio=%.3f",
@@ -134,7 +144,7 @@ class GeometryGateSource(GateStatusSource):
         w_over_h,
         area_ratio,
       )
-      return "open"
+      return "open", metrics
 
     logger.debug(
       "Gate=closed by geometry | gate=%s | conf=%.3f | in_open=%s | w/h=%.3f | area_ratio=%.3f",
@@ -145,7 +155,7 @@ class GeometryGateSource(GateStatusSource):
       area_ratio,
     )
     
-    return "closed"
+    return "closed", metrics
   
   @staticmethod
   def _best_det(dets: List[TrackDet], cls_name: str, min_conf: float) -> Optional[TrackDet]:
@@ -164,4 +174,4 @@ class VisionGateSource(GateStatusSource):
     """
     Placeholder for a small classifier (ONNX/TFLITE) later.
     """
-    return "unknown"
+    return "unknown", {}

@@ -28,6 +28,7 @@ from logic.gate_fsm import GateFSM
 from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSource, VisionGateSource
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
+from ui.formatting import fmt_ts
 
 logger = logging.getLogger("pipe_detect")
 
@@ -131,9 +132,13 @@ class App:
           logger.warning("No frame captured, retrying...")
           continue
         frame_orig, ts = item
-        orig_h, orig_w = frame_orig.shape[:2]
+        # We get the original frame (and size) as recorded by the source camera
+        orig_h, orig_w = frame_orig.shape[:2]       # Ex: VA - Imaging --> (w2620, h1216)
 
         frame_scaled = resize_for_inference(frame_orig, target_width=self.cfg.runtime.imgsz)
+        # imgsz - w960. scaled frame size: (w960, h445)
+        # NOTE: This is the frame passed to the ml model for inference.
+        # TODO: FPS of the source is 18.0 fps. We can force it along with the inference and rendering fps.
         scaled_h, scaled_w = frame_scaled.shape[:2]
 
         # Coordinate mapping:
@@ -142,10 +147,8 @@ class App:
         # - tracker.infer() returns bboxes in SCALED coordinates
         # Therefore, to map detections back to original coords, multiply by (orig/scaled).
         # For drawing ROIs on the scaled frame, multiply ROI points by (scaled/orig).
-        scale_x = scaled_w / orig_w
-        scale_y = scaled_h / orig_h
-        inv_scale_x = orig_w / scaled_w
-        inv_scale_y = orig_h / scaled_h
+        inv_scale_x = orig_w / scaled_w     # Ex: 2620 / 960 = 2.729
+        inv_scale_y = orig_h / scaled_h     # Ex: 1216 / 445 = 2.732
 
         logger.debug("Frame captured | idx=%d | ts=%.3f | shape=%s", frame_idx, ts, getattr(frame_scaled, "shape", None))
 
@@ -154,13 +157,15 @@ class App:
           frame_idx += 1
           continue
 
-        dets = tracker.infer(frame_scaled)
+        dets = tracker.infer(frame_scaled) # Inference running on scaled frame (w960, h445)
+        # It doesnt matter to yolo what the other dimension. Since it can detect the presence of objects
+        # and reports in absolutre pixel coordinates of the scaled frame.
         dets_orig = []
         for d in dets:
           if d.track_id is None:
               continue
-
-          x1 = d.bbox.x1 * inv_scale_x
+          # Original dets will be larger than inference coords. Hence multiplied by scale factors > 1.
+          x1 = d.bbox.x1 * inv_scale_x # Now we will map the dets to original frame coords.
           y1 = d.bbox.y1 * inv_scale_y
           x2 = d.bbox.x2 * inv_scale_x
           y2 = d.bbox.y2 * inv_scale_y
@@ -176,9 +181,9 @@ class App:
         logger.debug("Inference results | idx=%d | dets=%d", frame_idx, len(dets))
 
         # Update gate FSM
-        gate_events = gate_fsm.update(frame=frame_orig, dets=dets_orig)
+        gate_events, gate_metrics = gate_fsm.update(frame=frame_orig, dets=dets_orig)
         for event in gate_events:
-          logger.info(f"Gate opened: {event.gate_name} at {event.t_open}")
+          logger.info(f"Gate opened: {event.gate_name} at {fmt_ts(event.t_open)}")
           repo.insert_event("gate_open", None, f"{event.gate_name}@{event.t_open:.3f}")
         
         # Update pipe FSM
@@ -218,14 +223,15 @@ class App:
           })
         
         # Draw and publish latest frame (visualization sizing is separate from inference sizing)
-        vis_base = frame_orig
+        vis_base = frame_orig # w2620, h1216
         if int(self.cfg.runtime.publish_imgsz) > 0:
-          vis_base = resize_for_inference(frame_orig, target_width=int(self.cfg.runtime.publish_imgsz))
+          vis_base = resize_for_inference(frame_orig, target_width=int(self.cfg.runtime.publish_imgsz)) # e.g. w1920
 
         vis_h, vis_w = vis_base.shape[:2]
-        vis_scale_x = vis_w / float(orig_w)
-        vis_scale_y = vis_h / float(orig_h)
+        vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
+        vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730
 
+        # Original dets will be smaller in vis coords. Hence multiplied by scale factors < 1.
         dets_vis = [
           TrackDet(
             cls_name=d.cls_name,
@@ -241,7 +247,13 @@ class App:
           for d in dets_orig
         ]
 
-        vis = draw_overlay(vis_base.copy(), rois, dets_vis, ts, scale_x=vis_scale_x, scale_y=vis_scale_y)
+        vis = draw_overlay(vis_base.copy(), 
+                           rois, 
+                           dets_vis, 
+                           ts, 
+                           scale_x=vis_scale_x, 
+                           scale_y=vis_scale_y,
+                           gate_metrics=gate_metrics,)
         if not self.cfg.runtime.run_headless:
           cv2.imshow(window_name, vis)
           key = cv2.waitKey(1) & 0xFF
