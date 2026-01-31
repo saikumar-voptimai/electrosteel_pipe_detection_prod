@@ -67,6 +67,8 @@ class PipeFlowFSM:
       if d.cls_name != "pipe" or d.track_id is None:
         continue
       cx, cy = d.bbox.centroid()
+      if self.rois.contains("roi_left_origin", cx, cy) or self.rois.contains("roi_right_origin", cx, cy):
+        continue  # Exclusion ROIs
       #TODO: Pure centroid check may be insufficient, consider bbox overlap and iou
       if self.rois.contains("roi_loadcell", cx, cy):
         any_pipe_in_loadcell = True

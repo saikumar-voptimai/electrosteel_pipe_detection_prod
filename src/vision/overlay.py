@@ -39,6 +39,14 @@ def draw_overlay(frame_vis: np.ndarray,
   """
   out = frame_vis.copy()
 
+  # Precompute scaled ROIs for checks in visualization coordinates.
+  roi_loadcell_scaled: PolygonROI | None = None
+  if "roi_loadcell" in rois.rois:
+    roi_loadcell_scaled = PolygonROI(
+      "roi_loadcell",
+      scale_polygon(rois.rois["roi_loadcell"], scale_x, scale_y),
+    )
+
   # Draw key ROIs - Only for testing/debugging
   #TODO: Use Enums or constants for ROI names
   for name in [
@@ -59,7 +67,7 @@ def draw_overlay(frame_vis: np.ndarray,
     (cx, cy) = roi_polygon_scaled.centroid()                            
     cv2.circle(out, (int(cx), int(cy)), radius=10, color=(0, 255, 255), thickness=-1) # Centroid in yellow
     cv2.putText(out, name, 
-                (int(pts_np[0][0])+5, int(pts_np[0][1])+5),                # ROI name
+                (int(pts_np[0][0])-5, int(pts_np[0][1])+5),                # ROI name
                 cv2.FONT_HERSHEY_SIMPLEX, 
                 1, (0,255,255), 2)
   
@@ -76,7 +84,14 @@ def draw_overlay(frame_vis: np.ndarray,
   # Draw Detections/Tracks
   for d in dets_vis:
     x1, y1, x2, y2 = map(int, [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2])
-    color = (0, 255, 0) if d.cls_name == "pipe" else (255, 0, 0)
+    color = (255, 0, 0)
+    if d.cls_name == "pipe":
+      cx, cy = d.bbox.centroid()
+      if roi_loadcell_scaled is not None and roi_loadcell_scaled.contains(cx, cy):
+        color = (0, 0, 255) # Red if in loadcell ROI
+      else:
+        color = (0, 255, 0) # Green for the pipe
+    
     cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
     tid = d.track_id if d.track_id is not None else -1
     cv2.putText(out, 
@@ -88,7 +103,7 @@ def draw_overlay(frame_vis: np.ndarray,
                 2)
     cx, cy = d.bbox.centroid()
     cv2.circle(out, (int(cx), int(cy)), radius=5, color=color, thickness=-1) # Centroid in yellow
-    if d.cls_name == "gate" and gate_metrics is not None:
+    if (d.cls_name == "gate1" or d.cls_name == "gate2") and gate_metrics is not None:
       metrics_str = ", ".join([f"{k}:{v:.2f}" for k, v in gate_metrics.items()])
       cv2.putText(out,
                   f"Metrics: {metrics_str}",
@@ -141,4 +156,4 @@ class LatestFramePublisher:
       os.replace(str(tmp_path), str(out_full_path))
       logger.debug("Published latest frame | path=%s", out_full_path)
     except Exception:
-      logger.exception("Failed to replace latest frame | tmp=%s -> out=%s", tmp_path, out_full_path)
+      logger.warning("Failed to replace latest frame | tmp=%s -> out=%s", tmp_path, out_full_path)
