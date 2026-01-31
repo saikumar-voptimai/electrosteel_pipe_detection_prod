@@ -1,11 +1,15 @@
+# utils/config.py
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, List
 import yaml
 
+from utils.video_recorder import RecordingCfg  # ✅ single source of truth
 
 Point = Tuple[int, int]
 Polygon = List[Point]
+
 
 @dataclass(frozen=True)
 class CameraCfg:
@@ -38,7 +42,7 @@ class RuntimeCfg:
     imgsz: int
     conf: float
     iou: float
-    
+
     max_fps: int
     frame_skip: int
 
@@ -59,6 +63,7 @@ class RuntimeCfg:
     rearm_empty_frames: int
 
     gate: GateRuntimeCfg
+    recording: RecordingCfg | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +84,33 @@ class AppCfg:
 
 def _load_yaml(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _parse_recording_cfg(raw: Dict[str, Any] | None) -> RecordingCfg | None:
+    if not raw or not raw.get("enabled", False):
+        return None
+
+    fs = raw.get("frame_size")
+    frame_size = None
+    if isinstance(fs, (list, tuple)) and len(fs) == 2:
+        frame_size = (int(fs[0]), int(fs[1]))
+
+    return RecordingCfg(
+        enabled=bool(raw.get("enabled", True)),
+        output_dir=str(raw.get("output_dir", "scripts/video")),
+        segment_minutes=float(raw.get("segment_minutes", 10)),
+        gap_seconds=float(raw.get("gap_seconds", 0)),
+        container=str(raw.get("container", "mp4")),
+        fourcc=str(raw.get("fourcc", "mp4v")),
+        fps=float(raw.get("fps", 10)),
+        frame_size=frame_size,
+        queue_size=int(raw.get("queue_size", 240)),
+        drop_when_full=bool(raw.get("drop_when_full", True)),
+        filename_prefix=str(raw.get("filename_prefix", "cam")),
+        timestamp_format=str(raw.get("timestamp_format", "%Y%m%d_%H%M%S")),
+    )
 
 
 def load_config(
@@ -87,15 +118,20 @@ def load_config(
     rois_path: str,
     plc_path: str,
     camera_cfg_path: str = "config/camera.yaml",
+    video_record_path: str = "config/video_record.yaml",
 ) -> AppCfg:
     r = _load_yaml(runtime_path)
     rois_raw = _load_yaml(rois_path)
     p = _load_yaml(plc_path)
     c_raw = _load_yaml(camera_cfg_path)
 
+    # recording from separate yaml (supports wrapper or top-level)
+    rec_doc = _load_yaml(video_record_path)
+    rec_raw = (rec_doc.get("recording") or rec_doc) if isinstance(rec_doc, dict) else {}
+    recording_cfg = _parse_recording_cfg(rec_raw)
+
     cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
-    camera_cfg: CameraCfg | None = None
-    # Camera config is optional unless runtime.video_source is "gige".
+    camera_cfg = None
     if cam:
         camera_cfg = CameraCfg(
             id=cam.get("id", 0),
@@ -141,6 +177,7 @@ def load_config(
         stale_track_frames=int(r.get("stale_track_frames", 45)),
         rearm_empty_frames=int(r.get("rearm_empty_frames", 10)),
         gate=gate,
+        recording=recording_cfg,
     )
 
     plc = PlcCfg(
@@ -150,8 +187,9 @@ def load_config(
         modbus=p.get("modbus"),
     )
 
-    rois: Dict[str, Polygon] = {}
-    for name, pts in (rois_raw or {}).items():
-        rois[name] = [(int(x), int(y)) for (x, y) in pts]
+    rois: Dict[str, Polygon] = {
+        name: [(int(x), int(y)) for (x, y) in pts]
+        for name, pts in (rois_raw or {}).items()
+    }
 
     return AppCfg(runtime=runtime, rois=rois, plc=plc, camera_cfg=camera_cfg)

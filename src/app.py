@@ -81,7 +81,7 @@ class App:
     rois = ROIManager(self.cfg.rois)
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
-    # ---- Video recorder (non-blocking segmented recording) ----
+    # ---- Video recorder ----
     project_root = Path.cwd()
     recorder = None
     rec_cfg = self.cfg.runtime.recording # RecordingCfg | None (from config loader)

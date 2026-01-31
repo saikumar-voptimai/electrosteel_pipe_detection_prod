@@ -62,7 +62,7 @@ class Capture:
           "bayer2rgb ! "
           "videoconvert ! "
           f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1,format=BGR ! "
-          "appsink drop=true max-buffers=1 sync=false"
+          "appsink drop=true max-buffers=1 sync=-false"
       )
 
       self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
