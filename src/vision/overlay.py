@@ -11,6 +11,8 @@ import numpy as np
 
 from geometry.roi import ROIManager
 from vision.types import TrackDet
+from utils.roi_names import RoiName
+
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,8 @@ def draw_overlay(frame: np.ndarray,
 
   # Draw key ROIs - Only for testing/debugging
   #TODO: Use Enums or constants for ROI names
-  for name in [
-    "roi_loadcell",
-    "roi_caster5_origin",
-  ]:
+  for roi in [RoiName.LOADCELL, RoiName.CASTER5_ORIGIN]:
+    name = roi.value
     if name not in rois.rois:
       continue
     pts_orig = rois.rois[name]

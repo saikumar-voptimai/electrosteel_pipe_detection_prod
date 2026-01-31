@@ -26,21 +26,11 @@ from plc.factory import create_plc
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSource, VisionGateSource
+from utils.roi_names import REQUIRED_ROIS
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
 
 logger = logging.getLogger("pipe_detect")
-
-#TODO: Use enums or constants for ROI names
-REQUIRED_ROIS = [
-    "roi_loadcell",
-    "roi_caster5_origin",
-    "roi_left_origin",
-    "roi_right_origin",
-    "roi_safety_critical",
-    "roi_gate1_open", "roi_gate2_open",
-    "roi_gate1_closed", "roi_gate2_closed",
-]
 
 
 @dataclass
@@ -68,7 +58,15 @@ class App:
     for name in REQUIRED_ROIS:
       if name not in self.cfg.rois:
         raise RuntimeError(f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs.")
-    
+      
+    # Validate ROIs
+    for roi in REQUIRED_ROIS:
+      if roi.value not in self.cfg.rois:
+        raise RuntimeError(
+          f"Missing required ROI: {roi.value} in config/rois.yaml. Run --redraw to define ROIs."
+        )
+
+        
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
 

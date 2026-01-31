@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from utils.roi_names import RoiName
+
 
 import cv2
 import numpy as np
@@ -271,16 +273,17 @@ def default_roi_specs() -> List[ROISpec]:
   """
   #TODO: Use enums or constants for ROI names
   return [
-    ROISpec("roi_loadcell", (0,255, 255), "Loadcell zone: trigger PLC when ELIGIBLE pipe enters this ROI."),
-    ROISpec("roi_caster5_origin", (255, 255, 0), "Caster 5 origin zone: includes, caster5, trolley-end-area upto gate1."),
-    ROISpec("roi_left_origin",     (0, 165, 255), "Left origin/exclusion: pipes here are ignored. If originating here origin='other'."),
-    ROISpec("roi_right_origin",    (255, 0, 255), "Right origin/exclusion: pipes here are ignored. If originating here origin='other'."),
-    ROISpec("roi_safety_critical", (0, 0, 255),   "Safety zone: human detection inside this ROI is flagged/used for occlusion checks."),
-    ROISpec("roi_gate1_closed",    (255, 0, 0),   "Gate1 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
-    ROISpec("roi_gate1_open",      (0, 255, 0),   "Gate1 open ROI tall-narrow: gate should land here when open."),
-    ROISpec("roi_gate2_closed",    (128, 0, 0),   "Gate2 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
-    ROISpec("roi_gate2_open",      (0, 128, 0),   "Gate2 open ROI tall-narrow: gate should land here when open.")
-    ]
+  ROISpec(RoiName.LOADCELL.value,        (0,255,255), "Loadcell zone: trigger PLC when ELIGIBLE pipe enters this ROI."),
+  ROISpec(RoiName.CASTER5_ORIGIN.value,  (255,255,0), "Caster 5 origin zone: includes, caster5, trolley-end-area upto gate1."),
+  ROISpec(RoiName.LEFT_ORIGIN.value,     (0,165,255), "Left origin/exclusion: pipes here are ignored. If originating here origin='other'."),
+  ROISpec(RoiName.RIGHT_ORIGIN.value,    (255,0,255), "Right origin/exclusion: pipes here are ignored. If originating here origin='other'."),
+  ROISpec(RoiName.SAFETY_CRITICAL.value, (0,0,255),   "Safety zone: human detection inside this ROI is flagged/used for occlusion checks."),
+  ROISpec(RoiName.GATE1_CLOSED.value,    (255,0,0),   "Gate1 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
+  ROISpec(RoiName.GATE1_OPEN.value,      (0,255,0),   "Gate1 open ROI tall-narrow: gate should land here when open."),
+  ROISpec(RoiName.GATE2_CLOSED.value,    (128,0,0),   "Gate2 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
+  ROISpec(RoiName.GATE2_OPEN.value,      (0,128,0),   "Gate2 open ROI tall-narrow: gate should land here when open."),
+]
+
 
                                                    
 
