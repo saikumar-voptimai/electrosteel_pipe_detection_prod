@@ -67,7 +67,7 @@ def draw_overlay(frame_vis: np.ndarray,
     (cx, cy) = roi_polygon_scaled.centroid()                            
     cv2.circle(out, (int(cx), int(cy)), radius=10, color=(0, 255, 255), thickness=-1) # Centroid in yellow
     cv2.putText(out, name, 
-                (int(pts_np[0][0])-5, int(pts_np[0][1])+5),                # ROI name
+                (int(pts_np[0][0])+20, int(pts_np[0][1])+5),                # ROI name
                 cv2.FONT_HERSHEY_SIMPLEX, 
                 1, (0,255,255), 2)
   
@@ -103,7 +103,16 @@ def draw_overlay(frame_vis: np.ndarray,
                 2)
     cx, cy = d.bbox.centroid()
     cv2.circle(out, (int(cx), int(cy)), radius=5, color=color, thickness=-1) # Centroid in yellow
-    if (d.cls_name == "gate1" or d.cls_name == "gate2") and gate_metrics is not None:
+    if d.cls_name == "gate1" and gate_metrics is not None:
+      metrics_str = ", ".join([f"{k}:{v:.2f}" for k, v in gate_metrics.items()])
+      cv2.putText(out,
+                  f"Metrics: {metrics_str}",
+                  (x1, min(out.shape[0]-10, y2+25)),
+                  cv2.FONT_HERSHEY_SIMPLEX,
+                  1.0,
+                  color,
+                  2)
+    if d.cls_name == "gate2" and gate_metrics is not None:
       metrics_str = ", ".join([f"{k}:{v:.2f}" for k, v in gate_metrics.items()])
       cv2.putText(out,
                   f"Metrics: {metrics_str}",
