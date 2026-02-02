@@ -48,7 +48,7 @@ def draw_overlay(frame_vis: np.ndarray,
   #TODO: Use Enums or constants for ROI names
   for name in [
     "roi_loadcell",
-    "roi_caster5_origin",
+    "roi_caster_origin",
     "roi_gate1_open",
     "roi_gate2_open",
     "roi_right_origin",

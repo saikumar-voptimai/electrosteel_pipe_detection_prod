@@ -7,7 +7,7 @@ roi_loadcell:
   - 747
 - - 1577
   - 510
-roi_caster5_origin:
+roi__origin:
 - - 645
   - 500
 - - 896

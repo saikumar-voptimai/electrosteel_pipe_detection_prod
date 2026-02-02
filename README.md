@@ -235,7 +235,7 @@ The wizard window title shows the controls; the important ones:
 The wizard collects these ROIs in order (see `src/utils/roi_wizard.py`):
 
 - `roi_loadcell`: “loadcell zone” for triggering the loadcell-enter event
-- `roi_caster5_origin`: where a pipe must appear to be considered originating from caster
+- `roi_caster_origin`: where a pipe must appear to be considered originating from caster
 - `roi_left_origin`, `roi_right_origin`: exclusion areas; pipes originating here become `origin='other'`
 - `roi_safety_critical`: used for safety/occlusion logic (e.g., humans near gates)
 - `roi_gate1_closed`, `roi_gate1_open`: reference boxes for gate geometry decision

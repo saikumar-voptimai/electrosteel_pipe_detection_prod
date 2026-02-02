@@ -36,7 +36,7 @@ logger = logging.getLogger("pipe_detect")
 #TODO: Use enums or constants for ROI names
 REQUIRED_ROIS = [
     "roi_loadcell",
-    "roi_caster5_origin",
+    "roi_caster_origin",
     "roi_left_origin",
     "roi_right_origin",
     "roi_safety_critical",
@@ -54,7 +54,7 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | source=%s | model=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s",
+      "Starting app | source=%s | model=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
       self.cfg.runtime.video_source,
       self.cfg.runtime.model_path,
       self.cfg.runtime.db_path,
@@ -64,6 +64,7 @@ class App:
       self.cfg.runtime.publish_fps,
       self.cfg.runtime.publish_imgsz,
       self.cfg.runtime.run_headless,
+      os.getpid(),
     )
 
     # Validate ROIs

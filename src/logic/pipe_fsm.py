@@ -50,7 +50,7 @@ class PipeFlowFSM:
     """
     self.seq += 1
     # Stable unique id, per run/day
-    return f"caster5_{int(time.time())}_{self.seq:06d}"
+    return f"caster_{int(time.time())}_{self.seq:06d}"
 
   def update(self, frame_idx: int, ts: float, dets: List[TrackDet]) -> List[PipeStats]:
     """
@@ -115,7 +115,7 @@ class PipeFlowFSM:
 
       # Origin assignment to the pipe
       if p.origin is None:
-        if self.rois.contains("roi_caster5_origin", cx, cy):
+        if self.rois.contains("roi_caster_origin", cx, cy):
           p.origin_hits += 1
           if p.origin_hits >= self.origin_confirm_frames:
             p.origin = "caster"

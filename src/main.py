@@ -48,6 +48,4 @@ def main() -> None:
   App(cfg).run()
 
 if __name__ == "__main__":
-  import os
-  logger.info(f"Process ID: {os.getpid()}")
   main()
