@@ -136,7 +136,7 @@ class PipeFlowFSM:
       if not p.reached_gate_zone:
         p.conf_sum_till_gate += d.conf
         p.conf_count_till_gate += 1
-        if self.rois.contains(RoiName.GATE1_OPEN.value, cx, cy):
+        if self.rois.contains(RoiName.SAFETY_CRITICAL.value, cx, cy):
           p.reached_gate_zone = True
       
       # Loadcell Enter/Exit logic (only for eligible caster pipes)
