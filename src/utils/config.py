@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, List
 import yaml
+from pathlib import Path
 
 
 Point = Tuple[int, int]
@@ -44,6 +45,10 @@ class RuntimeCfg:
     max_fps: int
     frame_skip: int
 
+    # Throttle non-inference logic (FSM updates, DB upserts, event handling).
+    # 0 means run every inference frame.
+    update_fps: int
+
     db_path: str
     latest_jpg_path: str
     publish_fps: int
@@ -77,6 +82,34 @@ class AppCfg:
     rois: Dict[str, Polygon]
     plc: PlcCfg
     camera_cfg: CameraCfg | None
+    weight: "WeightCfg | None" = None
+
+
+@dataclass(frozen=True)
+class WeightMachineCfg:
+    ip: str
+    trigger_byte: int | None
+    trigger_bit: int | None
+    weight_real_offset: int
+    scale: float = 1.0
+    offset: float = 0.0
+
+
+@dataclass(frozen=True)
+class WeightCfg:
+    enabled: bool
+    machine_id_default: int
+    rack: int
+    slot: int
+    db_number: int
+    pulse_ms: int
+    read_duration_s: float
+    read_interval_s: float
+    stable_window_s: float
+    min_nonzero: float
+    max_std_rel: float
+    max_std_abs: float
+    machines: Dict[int, WeightMachineCfg]
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:
@@ -89,11 +122,17 @@ def load_config(
     rois_path: str,
     plc_path: str,
     camera_cfg_path: str = "config/camera.yaml",
+    weight_cfg_path: str = "config/weight.yaml",
 ) -> AppCfg:
     r = _load_yaml(runtime_path)
     rois_raw = _load_yaml(rois_path)
     p = _load_yaml(plc_path)
     c_raw = _load_yaml(camera_cfg_path)
+
+    # Weight config is optional.
+    weight_raw: Dict[str, Any] = {}
+    if weight_cfg_path and Path(weight_cfg_path).exists():
+        weight_raw = _load_yaml(weight_cfg_path)
 
     cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
     camera_cfg: CameraCfg | None = None
@@ -130,6 +169,7 @@ def load_config(
         iou=float(r.get("iou", 0.5)),
         max_fps=int(r.get("max_fps", 15)),
         frame_skip=int(r.get("frame_skip", 0)),
+        update_fps=int(r.get("update_fps", 0)),
         db_path=str(r.get("db_path", "var/pipes.db")),
         latest_jpg_path=str(r.get("latest_jpg_path", "var/latest.jpg")),
         publish_fps=int(r.get("publish_fps", 5)),
@@ -157,4 +197,37 @@ def load_config(
     for name, pts in (rois_raw or {}).items():
         rois[name] = [(int(x), int(y)) for (x, y) in pts]
 
-    return AppCfg(runtime=runtime, rois=rois, plc=plc, camera_cfg=camera_cfg)
+    weight_cfg: WeightCfg | None = None
+    if weight_raw:
+        enabled = bool(weight_raw.get("enabled", True))
+        machines_raw = dict(weight_raw.get("machines", {}) or {})
+        machines: Dict[int, WeightMachineCfg] = {}
+        for k, v in machines_raw.items():
+            mid = int(k)
+            v = v or {}
+            machines[mid] = WeightMachineCfg(
+                ip=str(v["ip"]),
+                trigger_byte=(int(v["trigger_byte"]) if v.get("trigger_byte") is not None else None),
+                trigger_bit=(int(v["trigger_bit"]) if v.get("trigger_bit") is not None else None),
+                weight_real_offset=int(v["weight_real_offset"]),
+                scale=float(v.get("scale", 1.0)),
+                offset=float(v.get("offset", 0.0)),
+            )
+
+        weight_cfg = WeightCfg(
+            enabled=enabled,
+            machine_id_default=int(weight_raw.get("machine_id_default", 1)),
+            rack=int(weight_raw.get("rack", 0)),
+            slot=int(weight_raw.get("slot", 1)),
+            db_number=int(weight_raw.get("db_number", 10)),
+            pulse_ms=int(weight_raw.get("pulse_ms", 300)),
+            read_duration_s=float(weight_raw.get("read_duration_s", 5.0)),
+            read_interval_s=float(weight_raw.get("read_interval_s", 0.2)),
+            stable_window_s=float(weight_raw.get("stable_window_s", 3.0)),
+            min_nonzero=float(weight_raw.get("min_nonzero", 0.1)),
+            max_std_rel=float(weight_raw.get("max_std_rel", 0.01)),
+            max_std_abs=float(weight_raw.get("max_std_abs", 2.0)),
+            machines=machines,
+        )
+
+    return AppCfg(runtime=runtime, rois=rois, plc=plc, camera_cfg=camera_cfg, weight=weight_cfg)

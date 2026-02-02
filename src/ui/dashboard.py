@@ -57,7 +57,8 @@ while True:
   
   rows = repo.fetch_pipes(limit=250)
   df = pd.DataFrame(rows, columns=["pipe_uid", "origin", "t_origin", "t_loadcell_enter", 
-                                   "t_loadcell_exit", "avg_conf_full", "avg_conf_till_gate", 
+                                   "t_loadcell_exit", "weight", "weight_quality", "weight_samples",
+                                   "avg_conf_full", "avg_conf_till_gate", 
                                    "frames_missing", "state", "last_seen_ts"])
 
   # Format timestamps first (while they may still be numeric/None)

@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS pipes (
   t_origin REAL,
   t_loadcell_enter REAL,
   t_loadcell_exit REAL,
+  weight REAL,
+  weight_quality TEXT,
+  weight_samples INTEGER,
   avg_conf_full REAL,
   conf_count_full INTEGER,
   avg_conf_till_gate REAL,
@@ -53,8 +56,27 @@ class SqliteRepo:
                                 timeout=30, 
                                 check_same_thread=False)
     self.conn.executescript(SCHEMA_SQL)
+    # Lightweight schema migration for existing DBs.
+    # `CREATE TABLE IF NOT EXISTS` does not add columns to an existing table.
+    self._ensure_columns(
+      "pipes",
+      {
+        "weight": "REAL",
+        "weight_quality": "TEXT",
+        "weight_samples": "INTEGER",
+      },
+    )
     self.conn.commit()
     logger.debug("SQLite schema ensured")
+
+  def _ensure_columns(self, table: str, cols: Dict[str, str]) -> None:
+    cur = self.conn.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cur.fetchall()}  # row[1] = column name
+    for name, typ in cols.items():
+      if name in existing:
+        continue
+      logger.info("SQLite migrate | table=%s add_column=%s %s", table, name, typ)
+      self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
   def close(self) -> None:
     logger.info("Closing sqlite db")
@@ -97,6 +119,7 @@ class SqliteRepo:
     cursor = self.conn.execute(
       """
       SELECT pipe_uid, origin, t_origin, t_loadcell_enter, t_loadcell_exit, 
+              weight, weight_quality, weight_samples,
              avg_conf_full, avg_conf_till_gate, frames_missing, state, last_seen_ts
       FROM pipes
       ORDER BY COALESCE(t_origin, 0) DESC

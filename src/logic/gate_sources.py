@@ -32,8 +32,16 @@ def _iou(a: BBox, b: BBox) -> float:
 
 class GateStatusSource(ABC):
   @abstractmethod
-  def get_position(self, gate_name: str, frame: np.ndarray, dets: List[TrackDet]) -> str:
-    """Get the position of the gate ("open" | "closed" | "unknown")"""
+  def get_position(
+    self,
+    gate_name: str,
+    frame: np.ndarray | None = None,
+    dets: List[TrackDet] | None = None,
+  ) -> tuple[str, Dict[str, float]]:
+    """Get gate position and optional metrics.
+
+    Returns: ("open"|"closed"|"unknown", metrics)
+    """
     ...
 
 
@@ -130,9 +138,9 @@ class GeometryGateSource(GateStatusSource):
     w_over_h = gate_bbox.w / max(1.0, gate_bbox.h)
     
     metrics = {}
-    metrics["closed_area"] = closed_area
-    metrics["area_ratio"] = area_ratio
-    metrics["w_over_h"] = w_over_h
+    metrics["ca"] = round(closed_area /10000.0, 2)  # closed area in sq.px/10000
+    metrics["ar"] = round(area_ratio, 2)
+    metrics["w/h"] = round(w_over_h, 2)
 
     # Open if in open ROI AND gate looks tall/narrow AND smaller area vs closed baseline
     if in_open and (w_over_h < self.max_w_over_h) and (area_ratio < self.max_area_ratio_vs_closed):

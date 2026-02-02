@@ -25,7 +25,8 @@ from plc.factory import create_plc
 
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
-from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
 from ui.formatting import fmt_ts
@@ -76,6 +77,11 @@ class App:
     repo = SqliteRepo(self.cfg.runtime.db_path)
     plc = create_plc(self.cfg.plc)
 
+    weight_service: WeightService | None = None
+    if getattr(self.cfg, "weight", None) is not None and self.cfg.weight.enabled:
+      weight_service = WeightService(self.cfg.weight, max_duration_s=30.0)
+      logger.info("Weight capture enabled | machine_default=%s", self.cfg.weight.machine_id_default)
+
     rois = ROIManager(self.cfg.rois)
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
@@ -115,6 +121,11 @@ class App:
 
     limiter = RateLimiter(self.cfg.runtime.max_fps)
 
+    # Independent throttles for non-inference logic and visualization.
+    update_fps = int(getattr(self.cfg.runtime, "update_fps", 0) or 0)
+    last_update_ts = 0.0
+    last_viz_ts = 0.0
+
     last_commit = time.time()
     last_setting_poll = time.time() 
 
@@ -125,8 +136,11 @@ class App:
       # Allow resizing the window on larger displays.
       cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
+    runfps = 1.0
     try:
       while True:
+        iter_time = time.time()
+        now = iter_time
         item = capture.read()
         if item is None:
           logger.warning("No frame captured, retrying...")
@@ -180,13 +194,18 @@ class App:
           )
         logger.debug("Inference results | idx=%d | dets=%d", frame_idx, len(dets))
 
+        gate_metrics = {}
+        updated_pipes = []
+        pipe_events = []
+
+        st = time.time()
         # Update gate FSM
         gate_events, gate_metrics = gate_fsm.update(frame=frame_orig, dets=dets_orig)
         for event in gate_events:
           logger.info(f"Gate opened: {event.gate_name} at {fmt_ts(event.t_open)}")
           repo.insert_event("gate_open", None, f"{event.gate_name}@{event.t_open:.3f}")
-        
-        # Update pipe FSM
+
+        # Update pipe FSM (full logic)
         updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
         logger.debug("Pipe FSM updated | idx=%d | updated=%d | events=%d", frame_idx, len(updated_pipes), len(pipe_events))
 
@@ -197,9 +216,37 @@ class App:
             repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
             if "pipe_on_loadcell" in self.cfg.plc.tags:
               plc.pulse(self.cfg.plc.tags["pipe_on_loadcell"], self.cfg.plc.pulse_ms)
-          
+
+            if weight_service is not None:
+              ok = weight_service.start(pipe_uid=event.pipe_uid, machine_id=self.cfg.weight.machine_id_default)
+              if ok:
+                repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
+
           if event.__class__.__name__ == "PipeExitedLoadcellEvent":
             repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+
+            if weight_service is not None:
+              weight_service.stop()
+        freq = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
+        logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
+      
+        # Persist any finalized weights (done in background thread)
+        if weight_service is not None:
+          for fin in weight_service.drain_results():
+            w = fin.result.weight
+            quality = fin.result.quality
+            samples = fin.result.samples
+            repo.upsert_pipe({
+              "pipe_uid": fin.pipe_uid,
+              "weight": w,
+              "weight_quality": quality,
+              "weight_samples": samples,
+            })
+            repo.insert_event(
+              "weight_captured",
+              fin.pipe_uid,
+              f"weight={w} quality={quality} samples={samples} reason={fin.reason}",
+            )
         
         # Upsert updated pipes
         for p in updated_pipes:
@@ -221,46 +268,60 @@ class App:
             "last_seen_ts": p.last_seen_ts,
             "reached_gate_zone": 1 if int(p.reached_gate_zone) else 0,
           })
-        
-        # Draw and publish latest frame (visualization sizing is separate from inference sizing)
-        vis_base = frame_orig # w2620, h1216
-        if int(self.cfg.runtime.publish_imgsz) > 0:
-          vis_base = resize_for_inference(frame_orig, target_width=int(self.cfg.runtime.publish_imgsz)) # e.g. w1920
 
-        vis_h, vis_w = vis_base.shape[:2]
-        vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
-        vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730
+        # Visualization and publishing are throttled by publish_fps.
+        do_viz = (int(self.cfg.runtime.publish_fps) > 0) and ((now - last_viz_ts) >= (1.0 / float(self.cfg.runtime.publish_fps)))
+        if do_viz:
+          st = time.time()
+          last_viz_ts = now
 
-        # Original dets will be smaller in vis coords. Hence multiplied by scale factors < 1.
-        dets_vis = [
-          TrackDet(
-            cls_name=d.cls_name,
-            conf=d.conf,
-            track_id=d.track_id,
-            bbox=BBox(
-              d.bbox.x1 * vis_scale_x,
-              d.bbox.y1 * vis_scale_y,
-              d.bbox.x2 * vis_scale_x,
-              d.bbox.y2 * vis_scale_y,
-            ),
+          # Draw and publish latest frame (visualization sizing is separate from inference sizing)
+          vis_base = frame_orig # w2620, h1216
+          if int(self.cfg.runtime.publish_imgsz) > 0:
+            vis_base = resize_for_inference(frame_orig, target_width=int(self.cfg.runtime.publish_imgsz)) # e.g. w1920
+
+          vis_h, vis_w = vis_base.shape[:2]
+          vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
+          vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730
+
+          # Original dets will be smaller in vis coords. Hence multiplied by scale factors < 1.
+          dets_vis = [
+            TrackDet(
+              cls_name=d.cls_name,
+              conf=d.conf,
+              track_id=d.track_id,
+              bbox=BBox(
+                d.bbox.x1 * vis_scale_x,
+                d.bbox.y1 * vis_scale_y,
+                d.bbox.x2 * vis_scale_x,
+                d.bbox.y2 * vis_scale_y,
+              ),
+            )
+            for d in dets_orig
+          ]
+
+          vis = draw_overlay(
+            vis_base,
+            rois,
+            dets_vis,
+            ts,
+            scale_x=vis_scale_x,
+            scale_y=vis_scale_y,
+            gate_metrics=gate_metrics,
+            debug=self.cfg.runtime.degbug_mode,
+            runfps=runfps,
           )
-          for d in dets_orig
-        ]
 
-        vis = draw_overlay(vis_base.copy(), 
-                           rois, 
-                           dets_vis, 
-                           ts, 
-                           scale_x=vis_scale_x, 
-                           scale_y=vis_scale_y,
-                           gate_metrics=gate_metrics,)
-        if not self.cfg.runtime.run_headless:
-          cv2.imshow(window_name, vis)
-          key = cv2.waitKey(1) & 0xFF
-          if key == 27:   # ESC key
-            logger.info("Quit signal received, shutting down...")
-            break
-        publisher.publish(vis)
+          if not self.cfg.runtime.run_headless:
+            cv2.imshow(window_name, vis)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:   # ESC key
+              logger.info("Quit signal received, shutting down...")
+              break
+          
+          fps = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
+          logger.debug("Visualization complete | freq=%.2f Hz", fps)
+          publisher.publish(vis)
         
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:
@@ -278,15 +339,23 @@ class App:
             repo.insert_event("setting_changed", None, f"gate_source={gate_source}")
             repo.commit()
           last_setting_poll = time.time()
-
+        
         limiter.sleep_if_needed()
         frame_idx += 1
+        iter_duration = time.time() - iter_time
+        runfps = 1.0 / iter_duration if iter_duration > 0 else 0.0
+        logger.debug("Frame processed | idx=%d | iter_duration=%.3f s | runfps=%.2f", frame_idx, iter_duration, runfps)
     except KeyboardInterrupt:
       logger.info("Shutting down application...")
     finally:
       try:
         repo.commit()
         repo.close()
+      except Exception:
+        pass
+      try:
+        if weight_service is not None:
+          weight_service.stop()
       except Exception:
         pass
       try:
@@ -335,5 +404,5 @@ class App:
         "gate1": self.cfg.plc.tags.get("gate1_open", ""),
         "gate2": self.cfg.plc.tags.get("gate2_open", ""),
       },
-      plc_signal_on_open=True,
+      plc_signal_on_open=False,
     )

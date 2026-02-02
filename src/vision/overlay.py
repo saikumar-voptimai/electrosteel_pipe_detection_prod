@@ -31,7 +31,9 @@ def draw_overlay(frame_vis: np.ndarray,
                  ts: float,
                  scale_x: float = 1.0,
                  scale_y: float = 1.0,
-                 gate_metrics: Dict = None) -> np.ndarray:
+                 gate_metrics: Dict = None,
+                 debug: bool = False,
+                 runfps: float = 0.0) -> np.ndarray:
   """
   Draw ROIs and tracking boxes on the frame. 
   The frame is resized frame_viz using publish_imgsz.
@@ -40,12 +42,7 @@ def draw_overlay(frame_vis: np.ndarray,
   out = frame_vis.copy()
 
   # Precompute scaled ROIs for checks in visualization coordinates.
-  roi_loadcell_scaled: PolygonROI | None = None
-  if "roi_loadcell" in rois.rois:
-    roi_loadcell_scaled = PolygonROI(
-      "roi_loadcell",
-      scale_polygon(rois.rois["roi_loadcell"], scale_x, scale_y),
-    )
+  rois_scaled: Dict[str, PolygonROI] = {k: PolygonROI(k, scale_polygon(v, scale_x, scale_y)) for k, v in rois.rois.items()}
 
   # Draw key ROIs - Only for testing/debugging
   #TODO: Use Enums or constants for ROI names
@@ -58,14 +55,17 @@ def draw_overlay(frame_vis: np.ndarray,
   ]:
     if name not in rois.rois:
       continue
+    if not debug:
+      logger.debug("Skipping ROI drawing since debug=False | roi=%s", name)
+      continue
     pts_orig = rois.rois[name]
     pts_scaled = scale_polygon(pts_orig, scale_x, scale_y)
-    roi_polygon_scaled = PolygonROI(name, pts_scaled)
+    roi_polygon_scaled = rois_scaled[name]
     
     pts_np = np.array(pts_scaled, dtype=np.int32)
-    cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)                   # ROI in yellow
+    cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)                    # ROI in yellow
     (cx, cy) = roi_polygon_scaled.centroid()                            
-    cv2.circle(out, (int(cx), int(cy)), radius=10, color=(0, 255, 255), thickness=-1) # Centroid in yellow
+    cv2.circle(out, (int(cx), int(cy)), radius=5, color=(0, 255, 255), thickness=-1) # Centroid in yellow
     cv2.putText(out, name, 
                 (int(pts_np[0][0])+20, int(pts_np[0][1])+5),                # ROI name
                 cv2.FONT_HERSHEY_SIMPLEX, 
@@ -73,10 +73,10 @@ def draw_overlay(frame_vis: np.ndarray,
   
   cv2.putText(
     out,
-    ist_now_str(ts),
-    (int(0.6 * out.shape[1]), int(0.9 * out.shape[0])),                    # Timestamp at btm-right
+    f"{runfps:.2f} FPS | {ist_now_str(ts)}",
+    (int(0.5 * out.shape[1]), int(0.9 * out.shape[0])),                    # Timestamp at btm-right
     cv2.FONT_HERSHEY_SIMPLEX,
-    2,
+    1.5,
     (255, 255, 255),
     2,
   )
@@ -85,13 +85,24 @@ def draw_overlay(frame_vis: np.ndarray,
   for d in dets_vis:
     x1, y1, x2, y2 = map(int, [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2])
     color = (255, 0, 0)
+    # Change pipe bbox color if in loadcell ROI
     if d.cls_name == "pipe":
       cx, cy = d.bbox.centroid()
-      if roi_loadcell_scaled is not None and roi_loadcell_scaled.contains(cx, cy):
+      if rois_scaled["roi_loadcell"] is not None and rois_scaled["roi_loadcell"].contains(cx, cy):
         color = (0, 0, 255) # Red if in loadcell ROI
       else:
         color = (0, 255, 0) # Green for the pipe
+    # Stop rendering pipe bbox if it is in roi_left_origin or roi_right_origin
+    if d.cls_name == "pipe":
+      cx, cy = d.bbox.centroid()
+      if rois_scaled["roi_left_origin"] is not None and rois_scaled["roi_left_origin"].contains(cx, cy):
+        continue
+      if rois_scaled["roi_right_origin"] is not None and rois_scaled["roi_right_origin"].contains(cx, cy):
+        continue
     
+    if not debug:
+      logger.debug("Skipping detailed bbox drawing since debug=False | det=%s", d)
+      continue
     cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
     tid = d.track_id if d.track_id is not None else -1
     cv2.putText(out, 
@@ -102,25 +113,21 @@ def draw_overlay(frame_vis: np.ndarray,
                 color, 
                 2)
     cx, cy = d.bbox.centroid()
-    cv2.circle(out, (int(cx), int(cy)), radius=5, color=color, thickness=-1) # Centroid in yellow
-    if d.cls_name == "gate1" and gate_metrics is not None:
-      metrics_str = ", ".join([f"{k}:{v:.2f}" for k, v in gate_metrics.items()])
-      cv2.putText(out,
-                  f"Metrics: {metrics_str}",
-                  (x1, min(out.shape[0]-10, y2+25)),
-                  cv2.FONT_HERSHEY_SIMPLEX,
-                  1.0,
-                  color,
-                  2)
-    if d.cls_name == "gate2" and gate_metrics is not None:
-      metrics_str = ", ".join([f"{k}:{v:.2f}" for k, v in gate_metrics.items()])
-      cv2.putText(out,
-                  f"Metrics: {metrics_str}",
-                  (x1, min(out.shape[0]-10, y2+25)),
-                  cv2.FONT_HERSHEY_SIMPLEX,
-                  1.0,
-                  color,
-                  2)
+    cv2.circle(out, (int(cx), int(cy)), radius=5, color=color, thickness=-1)
+
+    if d.cls_name in ("gate1", "gate2") and gate_metrics is not None and not debug:
+      m = gate_metrics.get(d.cls_name) if isinstance(gate_metrics, dict) else None
+      if isinstance(m, dict) and m:
+        metrics_str = ", ".join([f"{k}:{float(v):.2f}" for k, v in m.items()])
+        cv2.putText(
+          out,
+          f"Metrics: {metrics_str}",
+          (x1, min(out.shape[0]-10, y2+25)),
+          cv2.FONT_HERSHEY_SIMPLEX,
+          0.5,
+          color,
+          2,
+        )
   return out
 
 
@@ -145,8 +152,8 @@ class LatestFramePublisher:
       return
 
     now = time.time()
-    # if now - self._last < 1.0 / float(self.fps):
-    #   return
+    if now - self._last < 1.0 / float(self.fps):
+      return
     self._last = now
 
     #

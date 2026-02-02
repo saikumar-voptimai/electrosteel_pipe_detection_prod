@@ -207,3 +207,44 @@ class PipeFlowFSM:
     
     return updated, events
 
+
+  def touch(self, frame_idx: int, ts: float, dets: List[TrackDet]) -> None:
+    """Lightweight per-frame update.
+
+    Keeps per-track last_seen/seen/missing counters up to date without doing
+    ROI-driven state transitions or emitting events. This is used when the app
+    throttles full FSM logic via runtime.update_fps.
+    """
+    # Update seen/missing counters for currently detected pipes.
+    for d in dets:
+      if d.cls_name != "pipe" or d.track_id is None:
+        continue
+
+      tid = int(d.track_id)
+      p = self.pipes.get(tid)
+      if p is None:
+        p = PipeStats(pipe_uid=self._new_pipe_uid(), tracker_id=tid)
+        p.last_seen_frame = frame_idx
+        p.last_seen_ts = ts
+
+      if p.frames_seen > 0:
+        gap = (frame_idx - p.last_seen_frame) - 1
+        if gap > 0:
+          p.frames_missing += gap
+
+      p.frames_seen += 1
+      p.last_seen_frame = frame_idx
+      p.last_seen_ts = ts
+      p.tracker_id = tid
+
+      # Keep confidence aggregates roughly consistent even when throttled.
+      p.conf_sum_full += float(d.conf)
+      p.conf_count_full += 1
+
+      self.pipes[tid] = p
+
+    # Clean up stale tracks (based on frame_idx deltas).
+    stale_ids = [tid for tid, p in self.pipes.items() if frame_idx - p.last_seen_frame > self.stale_track_frames]
+    for tid in stale_ids:
+      del self.pipes[tid]
+
