@@ -52,13 +52,7 @@ class App:
       self.cfg.runtime.publish_fps,
       self.cfg.runtime.publish_imgsz,
       self.cfg.runtime.run_headless,
-    )
-
-    # Validate ROIs
-    for name in REQUIRED_ROIS:
-      if name not in self.cfg.rois:
-        raise RuntimeError(f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs.")
-      
+    )      
     # Validate ROIs
     for roi in REQUIRED_ROIS:
       if roi.value not in self.cfg.rois:
