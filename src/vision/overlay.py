@@ -11,6 +11,8 @@ import numpy as np
 
 from geometry.roi import ROIManager, PolygonROI
 from vision.types import TrackDet
+from utils.roi_names import RoiName
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +47,15 @@ def draw_overlay(frame_vis: np.ndarray,
   rois_scaled: Dict[str, PolygonROI] = {k: PolygonROI(k, scale_polygon(v, scale_x, scale_y)) for k, v in rois.rois.items()}
 
   # Draw key ROIs - Only for testing/debugging
-  #TODO: Use Enums or constants for ROI names
-  for name in [
-    "roi_loadcell",
-    "roi_caster_origin",
-    "roi_gate1_open",
-    "roi_gate2_open",
-    "roi_right_origin",
-  ]:
+  for roi in (
+    RoiName.LOADCELL,
+    RoiName.CASTER_ORIGIN,
+    RoiName.GATE1_OPEN,
+    RoiName.GATE2_OPEN,
+    RoiName.RIGHT_ORIGIN,
+    ):
+    name = roi.value
+
     if name not in rois.rois:
       continue
     if not debug:
@@ -80,6 +83,9 @@ def draw_overlay(frame_vis: np.ndarray,
     (255, 255, 255),
     2,
   )
+  loadcell = rois_scaled.get(RoiName.LOADCELL.value)
+  left_origin = rois_scaled.get(RoiName.LEFT_ORIGIN.value)
+  right_origin = rois_scaled.get(RoiName.RIGHT_ORIGIN.value)
 
   # Draw Detections/Tracks
   for d in dets_vis:
@@ -88,16 +94,16 @@ def draw_overlay(frame_vis: np.ndarray,
     # Change pipe bbox color if in loadcell ROI
     if d.cls_name == "pipe":
       cx, cy = d.bbox.centroid()
-      if rois_scaled["roi_loadcell"] is not None and rois_scaled["roi_loadcell"].contains(cx, cy):
+      if loadcell is not None and loadcell.contains(cx, cy):
         color = (0, 0, 255) # Red if in loadcell ROI
       else:
         color = (0, 255, 0) # Green for the pipe
     # Stop rendering pipe bbox if it is in roi_left_origin or roi_right_origin
     if d.cls_name == "pipe":
       cx, cy = d.bbox.centroid()
-      if rois_scaled["roi_left_origin"] is not None and rois_scaled["roi_left_origin"].contains(cx, cy):
+      if left_origin and left_origin.contains(cx, cy):
         continue
-      if rois_scaled["roi_right_origin"] is not None and rois_scaled["roi_right_origin"].contains(cx, cy):
+      if right_origin and right_origin.contains(cx, cy):
         continue
     
     if not debug:
