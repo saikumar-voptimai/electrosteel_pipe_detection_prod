@@ -146,6 +146,7 @@ class App:
         if item is None:
           logger.warning("No frame captured, retrying...")
           continue
+        st1 = time.time()
         frame_orig, ts = item
         # We get the original frame (and size) as recorded by the source camera
         orig_h, orig_w = frame_orig.shape[:2]       # Ex: VA - Imaging --> (w2620, h1216)
@@ -166,13 +167,14 @@ class App:
         inv_scale_y = orig_h / scaled_h     # Ex: 1216 / 445 = 2.732
 
         logger.debug("Frame captured | idx=%d | ts=%.3f | shape=%s", frame_idx, ts, getattr(frame_scaled, "shape", None))
-
+        st2 = time.time()
         # Skip frames if configured
         if self.cfg.runtime.frame_skip > 0 and (frame_idx % (self.cfg.runtime.frame_skip + 1) != 0):
           frame_idx += 1
           continue
 
         dets = tracker.infer(frame_scaled) # Inference running on scaled frame (w960, h445)
+        st3 = time.time()
         # It doesnt matter to yolo what the other dimension. Since it can detect the presence of objects
         # and reports in absolutre pixel coordinates of the scaled frame.
         dets_orig = []
@@ -230,7 +232,7 @@ class App:
               weight_service.stop()
         freq = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
         logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
-      
+
         # Persist any finalized weights (done in background thread)
         if weight_service is not None:
           for fin in weight_service.drain_results():
@@ -269,7 +271,7 @@ class App:
             "last_seen_ts": p.last_seen_ts,
             "reached_gate_zone": 1 if int(p.reached_gate_zone) else 0,
           })
-
+        st4 = time.time()
         # Visualization and publishing are throttled by publish_fps.
         do_viz = (int(self.cfg.runtime.publish_fps) > 0) and ((now - last_viz_ts) >= (1.0 / float(self.cfg.runtime.publish_fps)))
         if do_viz:
@@ -309,7 +311,7 @@ class App:
             scale_x=vis_scale_x,
             scale_y=vis_scale_y,
             gate_metrics=gate_metrics,
-            debug=self.cfg.runtime.degbug_mode,
+            debug=self.cfg.runtime.debug_mode,
             runfps=runfps,
           )
 
@@ -323,7 +325,7 @@ class App:
           fps = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
           logger.debug("Visualization complete | freq=%.2f Hz", fps)
           publisher.publish(vis)
-        
+        st5 = time.time()
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:
           logger.debug("DB commit | interval_s=%.3f", self.cfg.runtime.db_flush_interval_s)
@@ -331,7 +333,7 @@ class App:
           last_commit = time.time()
 
         # Poll settings for gate source change
-        if time.time() - last_setting_poll >= 2.0:
+        if time.time() - last_setting_poll >= 200.0:
           new_source = repo.get_setting("gate_source", default_gate_source)
           if new_source != gate_source:
             logger.info(f"Gate source changed from {gate_source} to {new_source}, updating FSM.")
@@ -346,6 +348,11 @@ class App:
         iter_duration = time.time() - iter_time
         runfps = 1.0 / iter_duration if iter_duration > 0 else 0.0
         logger.debug("Frame processed | idx=%d | iter_duration=%.3f s | runfps=%.2f", frame_idx, iter_duration, runfps)
+
+        st6 = time.time()
+        logger.debug("time for full loop: %.3f s", st6 - st1)
+        logger.debug("-----------------------------------------------------")
+        logger.debug("Fraction times | read+scale=%.3f | inference=%.3f | logic=%.3f | render=%.3f | overhead=%.3f", st2 - st1, st3 - st2, st4 - st3, st5 - st4, st6 - st5)
     except KeyboardInterrupt:
       logger.info("Shutting down application...")
     finally:

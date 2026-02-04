@@ -100,9 +100,9 @@ def draw_overlay(frame_vis: np.ndarray,
       if rois_scaled["roi_right_origin"] is not None and rois_scaled["roi_right_origin"].contains(cx, cy):
         continue
     
-    if not debug:
-      logger.debug("Skipping detailed bbox drawing since debug=False | det=%s", d)
-      continue
+    # if not debug:
+    #   logger.debug("Skipping detailed bbox drawing since debug=False | det=%s", d)
+    #   continue
     cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
     tid = d.track_id if d.track_id is not None else -1
     cv2.putText(out, 

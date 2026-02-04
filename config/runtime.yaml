@@ -5,7 +5,7 @@ tracker_yaml: "config/bytetrack.yaml"
 
 degbug_mode: true
 
-imgsz: 540 # Inference
+imgsz: 640 # Inference
 conf: 0.25
 iou: 0.5
 
@@ -22,10 +22,10 @@ log_path: "var/pipe_detect.log"     # e.g. "var/pipe_detect.log" (null = console
 
 db_path: "var/pipes.db"
 latest_jpg_path: "var/latest.jpg"
-publish_fps: 1                      # UI refresh source
-publish_imgsz: 540                  # max width/height of published image
+publish_fps: 3                      # UI refresh source
+publish_imgsz: 1080                  # max width/height of published image
 db_flush_interval_s: 5.0            # batch DB commits for Pi
-run_headless: true                  # disable display window
+run_headless: false                  # disable display window
 
 origin_confirm_frames: 5
 loadcell_enter_confirm_frames: 3    # you said first entry; 2 is safer

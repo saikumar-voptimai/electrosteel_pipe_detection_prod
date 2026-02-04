@@ -160,7 +160,7 @@ def load_config(
     )
 
     runtime = RuntimeCfg(
-        degbug_mode=bool(r.get("degbug_mode", False)),
+        debug_mode=bool(r.get("debug_mode", False)),
         video_source=r.get("video_source", 0),
         model_path=r["model_path"],
         tracker_yaml=r["tracker_yaml"],
