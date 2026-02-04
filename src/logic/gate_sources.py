@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import math
 import numpy as np
 import logging
-
+from utils.roi_names import RoiName, gate_open_roi, gate_closed_roi
 from geometry.roi import ROIManager
 from plc.client import PLCClient
 from vision.types import TrackDet, BBox
@@ -100,8 +100,8 @@ class GeometryGateSource(GateStatusSource):
       logger.debug("No gate detection | gate=%s | min_conf=%.3f", gate_name, self.min_gate_conf)
       return "unknown", metrics
     
-    open_roi = f"roi_{gate_name}_open"
-    closed_roi = f"roi_{gate_name}_closed"
+    open_roi = gate_open_roi(gate_name)
+    closed_roi = gate_closed_roi(gate_name)
 
     if open_roi not in self.rois.rois or closed_roi not in self.rois.rois:
       logger.debug("Missing gate ROIs | gate=%s | open_roi=%s | closed_roi=%s", gate_name, open_roi, closed_roi)
@@ -126,7 +126,7 @@ class GeometryGateSource(GateStatusSource):
       if self.rois.contains(closed_roi, hx, hy):
         logger.debug("Gate occluded by human in closed ROI | gate=%s", gate_name)
         return "unknown", metrics 
-      if self.rois.contains("roi_safety_critical", hx, hy) and _iou(hb, gate_bbox) >= self.human_iou_occlusion:
+      if self.rois.contains(RoiName.SAFETY_CRITICAL, hx, hy) and _iou(hb, gate_bbox) >= self.human_iou_occlusion:
         logger.debug("Gate occluded by human in safety ROI | gate=%s", gate_name)
         return "unknown", metrics
       

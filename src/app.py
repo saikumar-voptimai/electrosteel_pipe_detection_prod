@@ -13,6 +13,7 @@ from plc.client import PLCClient
 from vision.types import BBox, TrackDet
 from utils.config import AppCfg
 from utils.timing import RateLimiter
+from utils.roi_names import REQUIRED_ROIS, as_keys
 
 from camera.capture import Capture
 from geometry.roi import ROIManager
@@ -33,16 +34,6 @@ from ui.formatting import fmt_ts
 
 logger = logging.getLogger("pipe_detect")
 
-#TODO: Use enums or constants for ROI names
-REQUIRED_ROIS = [
-    "roi_loadcell",
-    "roi_caster_origin",
-    "roi_left_origin",
-    "roi_right_origin",
-    "roi_safety_critical",
-    "roi_gate1_open", "roi_gate2_open",
-    "roi_gate1_closed", "roi_gate2_closed",
-]
 
 
 @dataclass
@@ -68,9 +59,12 @@ class App:
     )
 
     # Validate ROIs
-    for name in REQUIRED_ROIS:
-      if name not in self.cfg.rois:
-        raise RuntimeError(f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs.")
+    for name in as_keys(REQUIRED_ROIS):
+        if name not in self.cfg.rois:
+            raise RuntimeError(
+                f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs."
+            )
+
     
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)

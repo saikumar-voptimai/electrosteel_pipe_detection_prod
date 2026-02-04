@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 import time
 import logging
+from utils.roi_names import RoiName
 
 from geometry.roi import ROIManager
 from logic.datatypes import PipeStats
@@ -67,10 +68,10 @@ class PipeFlowFSM:
       if d.cls_name != "pipe" or d.track_id is None:
         continue
       cx, cy = d.bbox.centroid()
-      if self.rois.contains("roi_left_origin", cx, cy) or self.rois.contains("roi_right_origin", cx, cy):
+      if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
         continue  # Exclusion ROIs
       #TODO: Pure centroid check may be insufficient, consider bbox overlap and iou
-      if self.rois.contains("roi_loadcell", cx, cy):
+      if self.rois.contains(RoiName.LOADCELL.value, cx, cy):
         any_pipe_in_loadcell = True
         break
 
@@ -115,7 +116,7 @@ class PipeFlowFSM:
 
       # Origin assignment to the pipe
       if p.origin is None:
-        if self.rois.contains("roi_caster_origin", cx, cy):
+        if self.rois.contains(RoiName.CASTER_ORIGIN.value, cx, cy):
           p.origin_hits += 1
           if p.origin_hits >= self.origin_confirm_frames:
             p.origin = "caster"
@@ -124,7 +125,7 @@ class PipeFlowFSM:
               logger.info(f"Pipe {p.pipe_uid} origin confirmed as caster at {fmt_ts(ts)} after {p.origin_hits} hits")
         else:
           # If it appears in exclusion ROIS first, mark as other
-          if self.rois.contains("roi_left_origin", cx, cy) or self.rois.contains("roi_right_origin", cx, cy):
+          if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
             p.origin_hits += 1
             if p.origin_hits >= self.origin_confirm_frames:
               p.origin = "other"
@@ -139,13 +140,13 @@ class PipeFlowFSM:
       if not p.reached_gate_zone:
         p.conf_sum_till_gate += d.conf
         p.conf_count_till_gate += 1
-        if self.rois.contains("roi_safety_critical", cx, cy):
+        if self.rois.contains(RoiName.SAFETY_CRITICAL.value, cx, cy):
           p.reached_gate_zone = True
       
       # Loadcell Enter/Exit logic (only for eligible caster pipes)
       eligible = (p.origin == "caster")
       if eligible and p.t_loadcell_enter is None:
-        if self.rois.contains("roi_loadcell", cx, cy):
+        if self.rois.contains(RoiName.LOADCELL.value, cx, cy):
           # TODO: Also add condition that that pipe is to the right of gates and to the left of roi_loadcell
           p.loadcell_hits += 1
           if self.loadcell_armed and p.loadcell_hits >= self.loadcell_enter_confirm_frames: # Persisted enter
@@ -169,7 +170,7 @@ class PipeFlowFSM:
       # Loadcell Exit: once on_loadcell, watch for leaving ROI
       if eligible and p.t_loadcell_enter is not None and p.t_loadcell_exit is None:
         #TODO: As soon as a pipe exits, we stop detecting it. So even when bbox is lost, we consider it exited.
-        if not self.rois.contains("roi_loadcell", cx, cy):
+        if not self.rois.contains(RoiName.LOADCELL.value, cx, cy):
           p.loadcell_exit_misses += 1
           if p.loadcell_exit_misses >= self.loadcell_exit_confirm_frames:
             p.t_loadcell_exit = ts
