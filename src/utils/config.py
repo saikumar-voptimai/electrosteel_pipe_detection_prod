@@ -29,6 +29,21 @@ class GateRuntimeCfg:
     max_w_over_h: float
     human_iou_occlusion: float
 
+@dataclass(frozen=True)
+class HistoryCfg:
+    enabled: bool = False
+    base_dir: str = ""
+    prefix: str = "pipe"
+    ext: str = "jpg"
+    date_folder_format: str = "%Y-%m-%d"
+    time_filename_format: str = "%H-%M-%S-%f"
+    timezone: str = "Asia/Kolkata"
+    shifts: list | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "HistoryCfg":
+        return cls(**(d or {}))
+
 
 @dataclass(frozen=True)
 class RuntimeCfg:
@@ -64,7 +79,8 @@ class RuntimeCfg:
     loadcell_exit_confirm_frames: int
     stale_track_frames: int
     rearm_empty_frames: int
-    history: dict | None
+    history: HistoryCfg | None
+
 
     gate: GateRuntimeCfg
 
@@ -159,9 +175,17 @@ def load_config(
         max_w_over_h=float(gate_raw.get("max_w_over_h", 0.9)),
         human_iou_occlusion=float(gate_raw.get("human_iou_occlusion", 0.10)),
     )
-    history_cfg = r.get("history")
-    if history_cfg is not None and not isinstance(history_cfg, dict):
-        history_cfg = None
+    history_raw = r.get("history") or {}
+    history = HistoryCfg(
+        enabled=bool(history_raw.get("enabled", False)),
+        base_dir=str(history_raw.get("base_dir", "")),
+        prefix=str(history_raw.get("prefix", "pipe")),
+        ext=str(history_raw.get("ext", "jpg")),
+        date_folder_format=str(history_raw.get("date_folder_format", "%Y-%m-%d")),
+        time_filename_format=str(history_raw.get("time_filename_format", "%H-%M-%S-%f")),
+        timezone=str(history_raw.get("timezone", "Asia/Kolkata")),
+        shifts=list(history_raw.get("shifts", []) or []),
+    )
 
     runtime = RuntimeCfg(
         debug_mode=bool(r.get("debug_mode", False)),
@@ -188,7 +212,7 @@ def load_config(
         stale_track_frames=int(r.get("stale_track_frames", 45)),
         rearm_empty_frames=int(r.get("rearm_empty_frames", 10)),
         gate=gate,
-        history=history_cfg, 
+        history=history, 
     )
 
     plc = PlcCfg(

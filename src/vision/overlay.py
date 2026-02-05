@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 from pathlib import Path
 import logging
-
+from utils.config import HistoryCfg 
 import cv2
 import numpy as np
 
@@ -20,6 +20,37 @@ from datetime import datetime
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+from datetime import datetime, time as dtime
+
+def _parse_hhmm(v: str) -> dtime:
+    h, m = v.split(":")
+    return dtime(int(h), int(m))
+
+def _resolve_shift(ts: datetime, shifts: list[dict]) -> str:
+    if not shifts:
+        return "shift_unknown"
+
+    t = ts.timetz().replace(tzinfo=None)
+
+    for s in shifts:
+        name = str(s.get("name", "shift"))
+        start = _parse_hhmm(s.get("start", "00:00"))
+        end = _parse_hhmm(s.get("end", "23:59"))
+
+        if start < end:
+            if start <= t < end:
+                return name
+        else:
+            # Overnight shift (e.g. 22:00 → 06:00)
+            if t >= start or t < end:
+                return name
+
+    return str(shifts[0].get("name", "shift"))
+
+
+
+
 
 def ist_now_str(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
@@ -140,7 +171,7 @@ def draw_overlay(frame_vis: np.ndarray,
 class LatestFramePublisher:
     out_path: str
     fps: int
-    history_cfg: dict | None
+    history_cfg: HistoryCfg  | None
     _last: float = 0.0
 
     def publish(self, frame_bgr: np.ndarray) -> None:
@@ -174,26 +205,37 @@ class LatestFramePublisher:
             os.replace(tmp, latest)
         except Exception:
             logger.debug("latest.jpg locked, skipping")
-
+        cfg = self.history_cfg
         # ---- history save (absolute OR relative path) ----
-        if not self.history_cfg or not self.history_cfg.get("enabled", False):
+        if not cfg or not cfg.enabled:
             return
 
         try:
-            tz = pytz.timezone(self.history_cfg.get("timezone", "Asia/Kolkata"))
+            tz = pytz.timezone(cfg.timezone)
             ts = datetime.fromtimestamp(now, tz)
 
-            base_dir = Path(self.history_cfg["base_dir"])
+            base_dir = Path(cfg.base_dir)
             if not base_dir.is_absolute():
                 base_dir = project_root / base_dir
 
-            day_dir = base_dir / ts.strftime("%Y-%m-%d")
-            day_dir.mkdir(parents=True, exist_ok=True)
+            shift = _resolve_shift(ts, cfg.shifts or [])
+            date_fmt = cfg.date_folder_format
 
+            day_dir = (
+                base_dir
+                / ts.strftime(date_fmt)
+                / shift
+            )
+            day_dir.mkdir(parents=True, exist_ok=True)
+            time_fmt = cfg.time_filename_format
+            ts_str = ts.strftime(time_fmt)
+            if "%f" in time_fmt:
+                ts_str = ts_str[:-3]
+            
             fname = (
-                f"{self.history_cfg.get('prefix', 'frame')}_"
-                f"{ts.strftime('%H-%M-%S-%f')[:-3]}."
-                f"{self.history_cfg.get('ext', 'jpg')}"
+                f"{cfg.prefix}_"
+                f"{ts_str}."
+                f"{cfg.ext}"
             )
 
             (day_dir / fname).write_bytes(data)
