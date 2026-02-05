@@ -136,46 +136,70 @@ def draw_overlay(frame_vis: np.ndarray,
         )
   return out
 
-
 @dataclass
 class LatestFramePublisher:
-  """
-  Overlay latest tracking results onto frames.
-  """
-  out_path: str
-  fps: int = 5
-  _last: float = 0.0
+    out_path: str
+    fps: int
+    history_cfg: dict | None
+    _last: float = 0.0
 
-  def publish(self, frame_bgr: np.ndarray) -> None:
-    """
-    Save the latest frame to out_path at limited fps.
-    """
-    if self.fps <= 0:
-      return
+    def publish(self, frame_bgr: np.ndarray) -> None:
+        if (
+            self.fps <= 0
+            or frame_bgr is None
+            or not isinstance(frame_bgr, np.ndarray)
+            or frame_bgr.size == 0
+        ):
+            return
 
-    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
-      logger.debug("Skipping publish: empty frame")
-      return
+        now = time.time()
+        if now - self._last < 1.0 / float(self.fps):
+            return
+        self._last = now
 
-    now = time.time()
-    if now - self._last < 1.0 / float(self.fps):
-      return
-    self._last = now
+        project_root = Path(__file__).parent.parent.parent
+        latest = project_root / self.out_path
+        latest.parent.mkdir(parents=True, exist_ok=True)
 
-    #
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
-    out_full_path = PROJECT_ROOT / self.out_path
-    os.makedirs(out_full_path.parent, exist_ok=True)
-    tmp_path = out_full_path.with_name(out_full_path.stem + "_new.jpg")
+        ok, enc = cv2.imencode(".jpg", frame_bgr)
+        if not ok:
+            logger.warning("Frame encode failed")
+            return
+        data = enc.tobytes()
 
-    ok = cv2.imwrite(str(tmp_path), frame_bgr)
-    if not ok:
-      logger.warning("Failed to write latest frame | tmp=%s", tmp_path)
-      return
+        # ---- latest.jpg (UI, best effort) ----
+        try:
+            tmp = latest.with_name(f"{latest.stem}.{os.getpid()}.tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, latest)
+        except Exception:
+            logger.debug("latest.jpg locked, skipping")
 
-    # Atomic replace
-    try:
-      os.replace(str(tmp_path), str(out_full_path))
-      logger.debug("Published latest frame | path=%s", out_full_path)
-    except Exception:
-      logger.warning("Failed to replace latest frame | tmp=%s -> out=%s", tmp_path, out_full_path)
+        # ---- history save (absolute OR relative path) ----
+        if not self.history_cfg or not self.history_cfg.get("enabled", False):
+            return
+
+        try:
+            tz = pytz.timezone(self.history_cfg.get("timezone", "Asia/Kolkata"))
+            ts = datetime.fromtimestamp(now, tz)
+
+            base_dir = Path(self.history_cfg["base_dir"])
+            if not base_dir.is_absolute():
+                base_dir = project_root / base_dir
+
+            day_dir = base_dir / ts.strftime("%Y-%m-%d")
+            day_dir.mkdir(parents=True, exist_ok=True)
+
+            fname = (
+                f"{self.history_cfg.get('prefix', 'frame')}_"
+                f"{ts.strftime('%H-%M-%S-%f')[:-3]}."
+                f"{self.history_cfg.get('ext', 'jpg')}"
+            )
+
+            (day_dir / fname).write_bytes(data)
+
+        except Exception:
+            logger.exception("History image save failed (ignored)")
+
+
+

@@ -32,7 +32,7 @@ class GateRuntimeCfg:
 
 @dataclass(frozen=True)
 class RuntimeCfg:
-    degbug_mode: bool
+    debug_mode: bool
 
     video_source: int | str
     model_path: str
@@ -64,6 +64,7 @@ class RuntimeCfg:
     loadcell_exit_confirm_frames: int
     stale_track_frames: int
     rearm_empty_frames: int
+    history: dict | None
 
     gate: GateRuntimeCfg
 
@@ -158,6 +159,9 @@ def load_config(
         max_w_over_h=float(gate_raw.get("max_w_over_h", 0.9)),
         human_iou_occlusion=float(gate_raw.get("human_iou_occlusion", 0.10)),
     )
+    history_cfg = r.get("history")
+    if history_cfg is not None and not isinstance(history_cfg, dict):
+        history_cfg = None
 
     runtime = RuntimeCfg(
         debug_mode=bool(r.get("debug_mode", False)),
@@ -184,6 +188,7 @@ def load_config(
         stale_track_frames=int(r.get("stale_track_frames", 45)),
         rearm_empty_frames=int(r.get("rearm_empty_frames", 10)),
         gate=gate,
+        history=history_cfg, 
     )
 
     plc = PlcCfg(

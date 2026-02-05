@@ -112,6 +112,7 @@ class App:
     publisher = LatestFramePublisher(
       out_path=self.cfg.runtime.latest_jpg_path,
       fps=self.cfg.runtime.publish_fps,
+      history_cfg=self.cfg.runtime.history,
     )
 
     limiter = RateLimiter(self.cfg.runtime.max_fps)
