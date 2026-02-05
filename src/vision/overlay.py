@@ -15,13 +15,11 @@ from utils.roi_names import RoiName
 
 
 logger = logging.getLogger(__name__)
-
-from datetime import datetime
+from datetime import datetime, time as dtime
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-from datetime import datetime, time as dtime
 
 def _parse_hhmm(v: str) -> dtime:
     h, m = v.split(":")
