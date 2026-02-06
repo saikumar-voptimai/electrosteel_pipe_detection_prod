@@ -319,7 +319,11 @@ class App:
           
           fps = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
           logger.debug("Visualization complete | freq=%.2f Hz", fps)
-          publisher.publish(vis)
+          publish_overlay = bool(self.cfg.runtime.publish_overlay)
+          if publish_overlay:
+              publisher.publish(vis)        # overlay image
+          else:
+              publisher.publish(vis_base)   # raw image
         st5 = time.time()
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:

@@ -1,9 +1,9 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: "tests/videos/va_imaging_test.avi"   # tests/videos/{video.mp4/.avi} | "gige"
+video_source: va_imaging_test.avi   # tests/videos/{video.mp4/.avi} | "gige"
 model_path: "models/yolo/best_nano_dataset0To5.onnx"
 tracker_yaml: "config/bytetrack.yaml"
 
-debug_mode: flase
+debug_mode: false
 
 imgsz: 640 # Inference
 conf: 0.25
@@ -24,6 +24,7 @@ db_path: "var/pipes.db"
 latest_jpg_path: "var/latest.jpg"
 publish_fps: 3                      # UI refresh source
 publish_imgsz: 1080                  # max width/height of published image
+publish_overlay: false
 history:
   enabled: true
   base_dir: var/history

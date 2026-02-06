@@ -81,7 +81,7 @@ class RuntimeCfg:
     rearm_empty_frames: int
     history: HistoryCfg | None
 
-
+    publish_overlay: bool
     gate: GateRuntimeCfg
 
 
@@ -202,6 +202,7 @@ def load_config(
         latest_jpg_path=str(r.get("latest_jpg_path", "var/latest.jpg")),
         publish_fps=int(r.get("publish_fps", 5)),
         publish_imgsz=int(r.get("publish_imgsz", 960)),
+        publish_overlay=bool(r.get("publish_overlay", True)),
         run_headless=bool(r.get("run_headless", False)),
         db_flush_interval_s=float(r.get("db_flush_interval_s", 1.0)),
         log_level=str(r.get("log_level", "INFO")),
