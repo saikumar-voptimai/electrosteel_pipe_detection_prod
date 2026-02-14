@@ -1,6 +1,6 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: va_imaging_test.avi   # tests/videos/{video.mp4/.avi} | "gige"
-model_path: "models/yolo/best_nano_dataset0To5.onnx"
+video_source: output.mp4   # tests/videos/{video.mp4/.avi} | "gige"
+model_path: "models/yolo/yolo11n_2026_06_0.onnx"
 tracker_yaml: "config/bytetrack.yaml"
 
 debug_mode: false
@@ -24,7 +24,7 @@ db_path: "var/pipes.db"
 latest_jpg_path: "var/latest.jpg"
 publish_fps: 3                      # UI refresh source
 publish_imgsz: 1080                  # max width/height of published image
-publish_overlay: false
+publish_overlay: true                   # draw detection/tracking overlay on published image
 history:
   enabled: true
   base_dir: var/history
@@ -53,6 +53,7 @@ loadcell_enter_confirm_frames: 3    # you said first entry; 2 is safer
 loadcell_exit_confirm_frames: 3
 stale_track_frames: 45
 rearm_empty_frames: 10
+min_pipe_gap_seconds: 60            # merge re-detected pipes from same origin within this window
 
 gate:
   source_default: "geometry"        # plc | geometry | vision

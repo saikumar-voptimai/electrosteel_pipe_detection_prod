@@ -46,7 +46,37 @@ def _resolve_shift(ts: datetime, shifts: list[dict]) -> str:
 
     return str(shifts[0].get("name", "shift"))
 
+def draw_text_bottom_right(
+    img: np.ndarray,
+    text: str,
+    font=cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale: float = 1.5,
+    thickness: int = 2,
+    margin: int = 20,
+    color: Tuple[int, int, int] = (255, 255, 255),
+) -> None:
+    """
+    Draw text anchored to the bottom-right corner, safely inside the frame.
+    """
+    h, w = img.shape[:2]
 
+    (text_w, text_h), baseline = cv2.getTextSize(
+        text, font, font_scale, thickness
+    )
+
+    x = max(margin, w - text_w - margin)
+    y = max(text_h + margin, h - margin)
+
+    cv2.putText(
+        img,
+        text,
+        (x, y),
+        font,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
 
 
@@ -103,15 +133,14 @@ def draw_overlay(frame_vis: np.ndarray,
                 cv2.FONT_HERSHEY_SIMPLEX, 
                 1, (0,255,255), 2)
   
-  cv2.putText(
-    out,
-    f"{runfps:.2f} FPS | {ist_now_str(ts)}",
-    (int(0.5 * out.shape[1]), int(0.9 * out.shape[0])),                    # Timestamp at btm-right
-    cv2.FONT_HERSHEY_SIMPLEX,
-    1.5,
-    (255, 255, 255),
-    2,
-  )
+  status_text = f"{runfps:.2f} FPS | {ist_now_str(ts)}"
+  draw_text_bottom_right(
+        out,
+        status_text,
+        font_scale=1.5,
+        thickness=2,
+        margin=20,
+    )
   loadcell = rois_scaled.get(RoiName.LOADCELL.value)
   left_origin = rois_scaled.get(RoiName.LEFT_ORIGIN.value)
   right_origin = rois_scaled.get(RoiName.RIGHT_ORIGIN.value)
@@ -164,7 +193,6 @@ def draw_overlay(frame_vis: np.ndarray,
           2,
         )
   return out
-
 @dataclass
 class LatestFramePublisher:
     out_path: str

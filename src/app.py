@@ -100,6 +100,7 @@ class App:
       loadcell_exit_confirm_frames=self.cfg.runtime.loadcell_exit_confirm_frames,
       stale_track_frames=self.cfg.runtime.stale_track_frames,
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
+      min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
     )
 
     # Gate source switching via DB setting
@@ -219,6 +220,11 @@ class App:
               ok = weight_service.start(pipe_uid=event.pipe_uid, machine_id=self.cfg.weight.machine_id_default)
               if ok:
                 repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
+
+          if event.__class__.__name__ == "PipeMergedEvent":
+            repo.delete_pipe(event.removed_uid)
+            repo.insert_event("pipe_merged", event.kept_uid,
+                              f"removed={event.removed_uid} origin={event.origin} gap={event.gap_seconds:.1f}s")
 
           if event.__class__.__name__ == "PipeExitedLoadcellEvent":
             repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
