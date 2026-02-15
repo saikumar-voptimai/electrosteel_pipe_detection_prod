@@ -8,7 +8,7 @@ from utils.roi_names import RoiName
 
 from geometry.roi import ROIManager
 from logic.datatypes import PipeStats
-from logic.events import PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent
+from logic.events import PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent, PipeMergedEvent
 from plc.client import PLCClient
 from vision.types import BBox, TrackDet
 from ui.formatting import fmt_ts
@@ -34,16 +34,20 @@ class PipeFlowFSM:
   loadcell_exit_confirm_frames: int = 2
   stale_track_frames: int = 45
   rearm_empty_frames: int = 10
+  min_pipe_gap_seconds: float = 60.0
 
   # Internal state
   pipes: Dict[int, PipeStats] = None
   seq: int = 0
   loadcell_armed: bool = True
   loadcell_empty_streak: int = 0
+  recently_staled: Dict[str, PipeStats] = None  # pipe_uid -> PipeStats
 
   def __post_init__(self) -> None:
     if self.pipes is None:
       self.pipes = {}
+    if self.recently_staled is None:
+      self.recently_staled = {}
   
   def _new_pipe_uid(self) -> str:
     """
@@ -53,14 +57,51 @@ class PipeFlowFSM:
     # Stable unique id, per run/day
     return f"caster_{int(time.time())}_{self.seq:06d}"
 
+  def _find_merge_candidate(self, origin: str, ts: float) -> PipeStats | None:
+    """Find the most recent staled pipe with matching origin within the gap window."""
+    best = None
+    best_ts = 0.0
+    for uid, p in self.recently_staled.items():
+      if p.origin == origin and (ts - p.last_seen_ts) <= self.min_pipe_gap_seconds:
+        if p.last_seen_ts > best_ts:
+          best = p
+          best_ts = p.last_seen_ts
+    return best
+
+  def _merge_into(self, target: PipeStats, source: PipeStats, ts: float) -> None:
+    """Merge source (staled pipe) state into target (new track). Source identity wins."""
+    target.pipe_uid = source.pipe_uid
+    target.origin = source.origin
+    target.t_origin = source.t_origin
+    target.t_loadcell_enter = source.t_loadcell_enter
+    target.t_loadcell_exit = None  # pipe is moving again
+    target.state = "moving"
+    target.counted = source.counted
+    target.reached_gate_zone = source.reached_gate_zone or target.reached_gate_zone
+    # Accumulate confidence and frame stats
+    target.conf_sum_full += source.conf_sum_full
+    target.conf_count_full += source.conf_count_full
+    target.conf_sum_till_gate += source.conf_sum_till_gate
+    target.conf_count_till_gate += source.conf_count_till_gate
+    target.frames_missing += source.frames_missing
+    # Reset loadcell counters for fresh detection
+    target.loadcell_hits = 0
+    target.loadcell_exit_misses = 0
+
   def update(self, frame_idx: int, ts: float, dets: List[TrackDet]) -> List[PipeStats]:
     """
     Returns list of updated PipeStats (for DB flush)
-    """  
+    """
     updated: List[PipeStats] = []
     events: List[object] = []
 
-    logger.debug("PipeFSM update | frame_idx=%d | ts=%s | dets=%d | tracks=%d", frame_idx, fmt_ts(ts), len(dets), len(self.pipes))
+    # Expire entries from recently_staled buffer
+    expired = [uid for uid, p in self.recently_staled.items()
+               if (ts - p.last_seen_ts) > self.min_pipe_gap_seconds]
+    for uid in expired:
+      del self.recently_staled[uid]
+
+    logger.debug("PipeFSM update | frame_idx=%d | ts=%s | dets=%d | tracks=%d | staled_buf=%d", frame_idx, fmt_ts(ts), len(dets), len(self.pipes), len(self.recently_staled))
 
     # Determine if loadcell ROI is empty (any pipe, not only eligible)
     any_pipe_in_loadcell = False
@@ -116,20 +157,38 @@ class PipeFlowFSM:
 
       # Origin assignment to the pipe
       if p.origin is None:
+        confirmed_origin = None
         if self.rois.contains(RoiName.CASTER_ORIGIN.value, cx, cy):
           p.origin_hits += 1
           if p.origin_hits >= self.origin_confirm_frames:
-            p.origin = "caster"
-            if p.t_origin is None:
-              p.t_origin = ts
-              logger.info(f"Pipe {p.pipe_uid} origin confirmed as caster at {fmt_ts(ts)} after {p.origin_hits} hits")
+            confirmed_origin = "caster"
         else:
           # If it appears in exclusion ROIS first, mark as other
           if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
             p.origin_hits += 1
             if p.origin_hits >= self.origin_confirm_frames:
-              p.origin = "other"
-              logger.info(f"Pipe origin set to other | uid={p.pipe_uid} | tid={tid} after {p.origin_hits} hits")
+              confirmed_origin = "other"
+
+        if confirmed_origin is not None:
+          # Attempt merge with a recently staled pipe of the same origin
+          candidate = self._find_merge_candidate(confirmed_origin, ts)
+          if candidate is not None:
+            old_uid = p.pipe_uid
+            gap = ts - candidate.last_seen_ts
+            self._merge_into(target=p, source=candidate, ts=ts)
+            del self.recently_staled[candidate.pipe_uid]
+            events.append(PipeMergedEvent(
+              kept_uid=p.pipe_uid,
+              removed_uid=old_uid,
+              origin=confirmed_origin,
+              gap_seconds=gap,
+            ))
+            logger.info("Merged pipe %s into %s | origin=%s | gap=%.1fs",
+                         old_uid, p.pipe_uid, confirmed_origin, gap)
+          else:
+            p.origin = confirmed_origin
+            p.t_origin = ts
+            logger.info(f"Pipe {p.pipe_uid} origin confirmed as {confirmed_origin} at {fmt_ts(ts)} after {p.origin_hits} hits")
       
       # Confidence tracking
       p.conf_sum_full += d.conf
@@ -204,6 +263,10 @@ class PipeFlowFSM:
         ))
         updated.append(p)
         logger.info("Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s", p.pipe_uid, tid, fmt_ts(ts))
+      # Park in recently_staled buffer for potential merge with re-detected tracks
+      if p.origin is not None:
+        self.recently_staled[p.pipe_uid] = p
+        logger.debug("Parked stale pipe in merge buffer | uid=%s | origin=%s", p.pipe_uid, p.origin)
       del self.pipes[tid]
     
     return updated, events
@@ -247,5 +310,8 @@ class PipeFlowFSM:
     # Clean up stale tracks (based on frame_idx deltas).
     stale_ids = [tid for tid, p in self.pipes.items() if frame_idx - p.last_seen_frame > self.stale_track_frames]
     for tid in stale_ids:
+      p = self.pipes[tid]
+      if p.origin is not None:
+        self.recently_staled[p.pipe_uid] = p
       del self.pipes[tid]
 
