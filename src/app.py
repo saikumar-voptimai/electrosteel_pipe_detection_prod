@@ -329,7 +329,7 @@ class App:
           if publish_overlay:
               publisher.publish(vis)        # overlay image
           else:
-              publisher.publish(vis_base)   # raw image
+              publisher.publish(vis_base, dets=dets_orig, ts=ts, gate_metrics=gate_metrics)   # raw image + txt metadata
         st5 = time.time()
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:

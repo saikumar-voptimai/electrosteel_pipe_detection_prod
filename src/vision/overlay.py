@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 from pathlib import Path
 import logging
-from utils.config import HistoryCfg 
+from utils.config import HistoryCfg
 import cv2
 import numpy as np
 
@@ -193,6 +193,33 @@ def draw_overlay(frame_vis: np.ndarray,
           2,
         )
   return out
+def _format_detections_txt(
+    ts: float,
+    dets: List[TrackDet],
+    gate_metrics: Dict | None = None,
+) -> str:
+    """Format detection data as a plain-text annotation file."""
+    lines: List[str] = []
+    lines.append(f"timestamp: {ist_now_str(ts)}")
+    lines.append("")
+    lines.append("# detections: class, track_id, confidence, x1, y1, x2, y2")
+    for d in dets:
+        tid = d.track_id if d.track_id is not None else -1
+        lines.append(
+            f"{d.cls_name} {tid} {d.conf:.4f} "
+            f"{d.bbox.x1:.1f} {d.bbox.y1:.1f} {d.bbox.x2:.1f} {d.bbox.y2:.1f}"
+        )
+    if gate_metrics:
+        lines.append("")
+        lines.append("# gate_metrics")
+        for gate_name, m in gate_metrics.items():
+            if isinstance(m, dict) and m:
+                metrics_str = " ".join(f"{k}={float(v):.4f}" for k, v in m.items())
+                lines.append(f"{gate_name}: {metrics_str}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 @dataclass
 class LatestFramePublisher:
     out_path: str
@@ -200,7 +227,13 @@ class LatestFramePublisher:
     history_cfg: HistoryCfg  | None
     _last: float = 0.0
 
-    def publish(self, frame_bgr: np.ndarray) -> None:
+    def publish(
+        self,
+        frame_bgr: np.ndarray,
+        dets: List[TrackDet] | None = None,
+        ts: float | None = None,
+        gate_metrics: Dict | None = None,
+    ) -> None:
         if (
             self.fps <= 0
             or frame_bgr is None
@@ -238,33 +271,47 @@ class LatestFramePublisher:
 
         try:
             tz = pytz.timezone(cfg.timezone)
-            ts = datetime.fromtimestamp(now, tz)
+            dt = datetime.fromtimestamp(now, tz)
 
             base_dir = Path(cfg.base_dir)
             if not base_dir.is_absolute():
                 base_dir = project_root / base_dir
 
-            shift = _resolve_shift(ts, cfg.shifts or [])
+            shift = _resolve_shift(dt, cfg.shifts or [])
             date_fmt = cfg.date_folder_format
 
-            day_dir = (
-                base_dir
-                / ts.strftime(date_fmt)
-                / shift
-            )
-            day_dir.mkdir(parents=True, exist_ok=True)
+            date_dir = base_dir / dt.strftime(date_fmt)
+
             time_fmt = cfg.time_filename_format
-            ts_str = ts.strftime(time_fmt)
+            ts_str = dt.strftime(time_fmt)
             if "%f" in time_fmt:
                 ts_str = ts_str[:-3]
-            
+
             fname = (
                 f"{cfg.prefix}_"
                 f"{ts_str}."
                 f"{cfg.ext}"
             )
 
-            (day_dir / fname).write_bytes(data)
+            img_dir = date_dir / f"{shift}_img"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            (img_dir / fname).write_bytes(data)
+
+            # Save detection metadata as .txt alongside the image
+            if dets is not None:
+                txt_dir = date_dir / f"{shift}_text"
+                txt_dir.mkdir(parents=True, exist_ok=True)
+                txt_fname = (
+                    f"{cfg.prefix}_"
+                    f"{ts_str}."
+                    "txt"
+                )
+                txt_content = _format_detections_txt(
+                    ts=ts if ts is not None else now,
+                    dets=dets,
+                    gate_metrics=gate_metrics,
+                )
+                (txt_dir / txt_fname).write_text(txt_content, encoding="utf-8")
 
         except Exception:
             logger.exception("History image save failed (ignored)")
