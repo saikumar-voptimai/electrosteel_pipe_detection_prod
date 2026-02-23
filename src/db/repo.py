@@ -97,11 +97,6 @@ class SqliteRepo:
     self.conn.execute(sql, tuple(row.values()))
     logger.debug("Upsert pipe | uid=%s | origin=%s | state=%s", row.get("pipe_uid"), row.get("origin"), row.get("state"))
   
-  def delete_pipe(self, pipe_uid: str) -> None:
-    """Delete a pipe record (used when merging duplicate tracks)."""
-    self.conn.execute("DELETE FROM pipes WHERE pipe_uid=?", (pipe_uid,))
-    logger.info("Deleted pipe | uid=%s", pipe_uid)
-
   def insert_event(self, event_type: str, pipe_uid: str | None, details: str = "") -> None:
     """
     Insert an event into the events table

@@ -79,7 +79,7 @@ class RuntimeCfg:
     loadcell_exit_confirm_frames: int
     stale_track_frames: int
     rearm_empty_frames: int
-    min_pipe_gap_seconds: float
+    min_pipe_gap_seconds: int
     history: HistoryCfg | None
 
     publish_overlay: bool
@@ -213,7 +213,7 @@ def load_config(
         loadcell_exit_confirm_frames=int(r.get("loadcell_exit_confirm_frames", 2)),
         stale_track_frames=int(r.get("stale_track_frames", 45)),
         rearm_empty_frames=int(r.get("rearm_empty_frames", 10)),
-        min_pipe_gap_seconds=float(r.get("min_pipe_gap_seconds", 60)),
+        min_pipe_gap_seconds=int(r.get("min_pipe_gap_seconds", 60)),
         gate=gate,
         history=history, 
     )

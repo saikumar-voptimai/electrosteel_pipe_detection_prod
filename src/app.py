@@ -221,11 +221,6 @@ class App:
               if ok:
                 repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
 
-          if event.__class__.__name__ == "PipeMergedEvent":
-            repo.delete_pipe(event.removed_uid)
-            repo.insert_event("pipe_merged", event.kept_uid,
-                              f"removed={event.removed_uid} origin={event.origin} gap={event.gap_seconds:.1f}s")
-
           if event.__class__.__name__ == "PipeExitedLoadcellEvent":
             repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
 
