@@ -48,15 +48,14 @@ class PipeFlowFSM:
         self.seq += 1
         return f"caster_{int(time.time())}_{self.seq:06d}"
 
-    # --------------------------------------------------------
+
     def update(self, frame_idx: int, ts: float, dets: List[TrackDet]):
 
         updated: List[PipeStats] = []
         events: List[object] = []
 
-        # ----------------------------------------------------
+
         # Check loadcell empty for rearm
-        # ----------------------------------------------------
         any_pipe_in_loadcell = False
         for d in dets:
           if d.cls_name != "pipe" or d.track_id is None:
@@ -81,9 +80,8 @@ class PipeFlowFSM:
                 self.loadcell_armed = True
                 logger.info("Loadcell re-armed")
 
-        # ----------------------------------------------------
         # Process detections
-        # ----------------------------------------------------
+
         for d in dets:
 
             if d.cls_name != "pipe" or d.track_id is None:
@@ -111,9 +109,7 @@ class PipeFlowFSM:
             p.last_seen_ts = ts
             p.tracker_id = tid
 
-            # ------------------------------------------------
             # ORIGIN CONFIRMATION
-            # ------------------------------------------------
             if p.origin is None:
 
                 if self.rois.contains(RoiName.CASTER_ORIGIN.value, cx, cy):

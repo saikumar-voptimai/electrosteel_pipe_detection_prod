@@ -48,32 +48,25 @@ class HistoryCfg:
 @dataclass(frozen=True)
 class RuntimeCfg:
     debug_mode: bool
-
     video_source: int | str
     model_path: str
     tracker_yaml: str
-
     imgsz: int
     conf: float
     iou: float
-    
     max_fps: int
     frame_skip: int
-
     # Throttle non-inference logic (FSM updates, DB upserts, event handling).
     # 0 means run every inference frame.
     update_fps: int
-
     db_path: str
     latest_jpg_path: str
     publish_fps: int
-    publish_imgsz: int
+    publish_imgsz: int | tuple[int, int]
     run_headless: bool
     db_flush_interval_s: float
-
     log_level: str
     log_path: str | None
-
     origin_confirm_frames: int
     loadcell_enter_confirm_frames: int
     loadcell_exit_confirm_frames: int
@@ -81,7 +74,7 @@ class RuntimeCfg:
     rearm_empty_frames: int
     min_pipe_gap_seconds: int
     history: HistoryCfg | None
-
+    class_name_to_id: Dict[str, int]
     publish_overlay: bool
     gate: GateRuntimeCfg
 
@@ -187,6 +180,16 @@ def load_config(
         timezone=str(history_raw.get("timezone", "Asia/Kolkata")),
         shifts=list(history_raw.get("shifts", []) or []),
     )
+    class_map_raw = r.get("class_name_to_id", {}) or {}
+    class_name_to_id = {str(k): int(v) for k, v in class_map_raw.items()}
+
+    raw_imgsz = r.get("publish_imgsz", 960)
+    if isinstance(raw_imgsz, (list, tuple)) and len(raw_imgsz) == 2:
+        publish_imgsz = (int(raw_imgsz[0]), int(raw_imgsz[1]))
+    elif isinstance(raw_imgsz, int):
+        publish_imgsz = raw_imgsz
+    else:
+        raise ValueError("publish_imgsz must be int or [width, height]")
 
     runtime = RuntimeCfg(
         debug_mode=bool(r.get("debug_mode", False)),
@@ -202,7 +205,7 @@ def load_config(
         db_path=str(r.get("db_path", "var/pipes.db")),
         latest_jpg_path=str(r.get("latest_jpg_path", "var/latest.jpg")),
         publish_fps=int(r.get("publish_fps", 5)),
-        publish_imgsz=int(r.get("publish_imgsz", 960)),
+        publish_imgsz=publish_imgsz,
         publish_overlay=bool(r.get("publish_overlay", True)),
         run_headless=bool(r.get("run_headless", False)),
         db_flush_interval_s=float(r.get("db_flush_interval_s", 1.0)),
@@ -211,6 +214,7 @@ def load_config(
         origin_confirm_frames=int(r.get("origin_confirm_frames", 2)),
         loadcell_enter_confirm_frames=int(r.get("loadcell_enter_confirm_frames", 1)),
         loadcell_exit_confirm_frames=int(r.get("loadcell_exit_confirm_frames", 2)),
+        class_name_to_id=class_name_to_id,
         stale_track_frames=int(r.get("stale_track_frames", 45)),
         rearm_empty_frames=int(r.get("rearm_empty_frames", 10)),
         min_pipe_gap_seconds=int(r.get("min_pipe_gap_seconds", 60)),
