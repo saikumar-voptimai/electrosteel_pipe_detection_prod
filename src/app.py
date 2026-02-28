@@ -285,12 +285,16 @@ class App:
           # Draw and publish latest frame (visualization sizing is separate from inference sizing)
           vis_base = frame_orig # w2620, h1216
           pub_size = self.cfg.runtime.publish_imgsz
-          # If 0 → keep original resolution
+
           if isinstance(pub_size, int) and pub_size > 0:
               vis_base = resize_for_inference(
                   frame_orig,
                   target_width=pub_size
               )
+
+          elif isinstance(pub_size, tuple) and len(pub_size) == 2:
+              target_w, target_h = pub_size
+              vis_base = cv2.resize(frame_orig, (target_w, target_h))
           vis_h, vis_w = vis_base.shape[:2]
           vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
           vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730
