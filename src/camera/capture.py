@@ -17,10 +17,47 @@ class Capture:
   camera_cfg: CameraCfg | None = None
   reconnect_sleep_s: float = 1.0
   warmup_frames: int = 10
-  gamma: float = 1.2   # 1.0 = no change, >1 brightens shadows, <1 darkens
+
 
   _cap: cv2.VideoCapture | None = field(default=None, init=False)
-  _gamma_lut: np.ndarray | None = field(default=None, init=False)
+  def _apply_camera_settings(self):
+    """
+    Configure Daheng camera parameters via arv-tool
+    """
+    try:
+        logger.info("Applying camera parameters via arv-tool")
+
+        subprocess.run(["arv-tool-0.10", "control", "ExposureAuto=Off"], check=False)
+        subprocess.run(["arv-tool-0.10", "control", "GainAuto=Off"], check=False)
+
+        subprocess.run([
+            "arv-tool-0.10", "control",
+            f"ExposureTime={self.camera_cfg.exposure_us}"
+        ], check=False)
+
+        subprocess.run([
+            "arv-tool-0.10", "control",
+            f"Gain={self.camera_cfg.gain_db}"
+        ], check=False)
+
+        subprocess.run(["arv-tool-0.10", "control", "GammaEnable=1"], check=False)
+        subprocess.run(["arv-tool-0.10", "control", "GammaMode=sRGB"], check=False)
+
+        subprocess.run(["arv-tool-0.10", "control", "AcquisitionFrameRateMode=On"], check=False)
+        subprocess.run([
+            "arv-tool-0.10", "control",
+            f"AcquisitionFrameRate={self.camera_cfg.fps}"
+        ], check=False)
+
+        logger.info(
+            "Camera settings applied | exposure=%s us | gain=%s dB | gamma=sRGB",
+            self.camera_cfg.exposure_us,
+            self.camera_cfg.gain_db
+        )
+
+    except Exception as e:
+        logger.warning("Camera configuration failed: %s", e)
+
 
   def open(self) -> None:
     """
@@ -48,6 +85,8 @@ class Capture:
         logger.debug("Process cleanup tools not found; skipping pkill")
 
       # List cameras and see "Daheng" exists in the output. Also log.
+      # Apply camera configuration
+      self._apply_camera_settings()
       try:
         output = subprocess.run(
           ["arv-tool-0.10", "list"],
@@ -92,13 +131,7 @@ class Capture:
     # Warmup (single place to avoid skipping extra frames)
     for _ in range(max(0, int(self.warmup_frames))):
       self._cap.read()
-    # Build gamma LUT if gamma != 1
-    if self.camera_cfg and getattr(self.camera_cfg, "gamma", 1.0) != 1.0:
-        gamma = float(self.camera_cfg.gamma)
-        inv_gamma = 1.0 / gamma
-        self._gamma_lut = (np.power(np.arange(256) / 255.0, inv_gamma) * 255).astype(np.uint8)
-    else:
-        self._gamma_lut = None
+
 
   def read(self) -> Tuple[np.ndarray, float] | None:
     """
@@ -110,9 +143,6 @@ class Capture:
 
     ok, frame = self._cap.read()
     if ok and frame is not None:
-      if self._gamma_lut is not None:
-        frame = cv2.LUT(frame, self._gamma_lut)
-
       return frame, time.time()
     
     # Try reconnect
