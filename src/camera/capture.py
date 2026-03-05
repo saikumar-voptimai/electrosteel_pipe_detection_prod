@@ -17,8 +17,10 @@ class Capture:
   camera_cfg: CameraCfg | None = None
   reconnect_sleep_s: float = 1.0
   warmup_frames: int = 10
+  gamma: float = 1.2   # 1.0 = no change, >1 brightens shadows, <1 darkens
 
   _cap: cv2.VideoCapture | None = field(default=None, init=False)
+  _gamma_lut: np.ndarray | None = field(default=None, init=False)
 
   def open(self) -> None:
     """
@@ -90,6 +92,13 @@ class Capture:
     # Warmup (single place to avoid skipping extra frames)
     for _ in range(max(0, int(self.warmup_frames))):
       self._cap.read()
+    # Build gamma LUT if gamma != 1
+    if self.camera_cfg and getattr(self.camera_cfg, "gamma", 1.0) != 1.0:
+        gamma = float(self.camera_cfg.gamma)
+        inv_gamma = 1.0 / gamma
+        self._gamma_lut = (np.power(np.arange(256) / 255.0, inv_gamma) * 255).astype(np.uint8)
+    else:
+        self._gamma_lut = None
 
   def read(self) -> Tuple[np.ndarray, float] | None:
     """
@@ -101,6 +110,9 @@ class Capture:
 
     ok, frame = self._cap.read()
     if ok and frame is not None:
+      if self._gamma_lut is not None:
+        frame = cv2.LUT(frame, self._gamma_lut)
+
       return frame, time.time()
     
     # Try reconnect
