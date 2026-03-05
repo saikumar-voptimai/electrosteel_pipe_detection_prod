@@ -29,6 +29,7 @@ class PipeFlowFSM:
     stale_track_frames: int = 45
     rearm_empty_frames: int = 10
     min_pipe_gap_seconds: int = 15
+    loadcell_covered_per: int = 90
 
     pipes: Dict[int, PipeStats] = None
     seq: int = 0
@@ -43,7 +44,15 @@ class PipeFlowFSM:
             self.pipes = {}
         self.last_caster_pipe = None
 
-    # --------------------------------------------------------
+    # loadcell coverage area (e.g., 90%)
+    def loadcell_covered_percentage(self, bbox):
+        r = self.rois.rois[RoiName.LOADCELL.value]
+        xs, ys = zip(*r)
+        ix = max(0, min(max(xs), bbox.x2) - max(min(xs), bbox.x1))
+        iy = max(0, min(max(ys), bbox.y2) - max(min(ys), bbox.y1))
+        return (ix * iy) / ((max(xs) - min(xs)) * (max(ys) - min(ys))) >= self.loadcell_covered_per / 100.0
+
+    # UID generation logic with reuse based on time gap
     def _new_pipe_uid(self) -> str:
         self.seq += 1
         return f"caster_{int(time.time())}_{self.seq:06d}"
@@ -68,7 +77,7 @@ class PipeFlowFSM:
             self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
               continue
 
-          if self.rois.contains(RoiName.LOADCELL.value, cx, cy):
+          if self.loadcell_covered_percentage(d.bbox):
               any_pipe_in_loadcell = True
               break
         if any_pipe_in_loadcell:
@@ -127,7 +136,7 @@ class PipeFlowFSM:
                             self.last_caster_pipe is not None
                             and self.last_caster_pipe.t_origin is not None
                         ):
-                            gap_sec = ts - self.last_caster_pipe.t_origin
+                            gap_sec = ts - self.last_caster_pipe.last_seen_ts
 
                             if 0 <= gap_sec <= self.min_pipe_gap_seconds:
                                 reuse_uid = self.last_caster_pipe.pipe_uid
@@ -161,14 +170,13 @@ class PipeFlowFSM:
                     if p.origin_hits >= self.origin_confirm_frames:
                         p.origin = "other"
 
-            # ------------------------------------------------
             # LOADCELL ENTER
-            # ------------------------------------------------
+
             eligible = (p.origin == "caster")
 
             if eligible and p.t_loadcell_enter is None:
 
-                if self.rois.contains(RoiName.LOADCELL.value, cx, cy):
+                if self.loadcell_covered_percentage(d.bbox):
 
                     p.loadcell_hits += 1
 
@@ -198,12 +206,10 @@ class PipeFlowFSM:
                 else:
                     p.loadcell_hits = 0
 
-            # ------------------------------------------------
             # LOADCELL EXIT
-            # ------------------------------------------------
             if eligible and p.t_loadcell_enter and not p.t_loadcell_exit:
 
-                if not self.rois.contains(RoiName.LOADCELL.value, cx, cy):
+                if not self.loadcell_covered_percentage(d.bbox):
 
                     p.loadcell_exit_misses += 1
 
