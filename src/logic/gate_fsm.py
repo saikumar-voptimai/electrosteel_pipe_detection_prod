@@ -7,7 +7,7 @@ import numpy as np
 import logging
 
 from logic.datatypes import GateStatus
-from logic.events import GateOpenedEvent
+from logic.events import GateOpenedEvent, GateClosedEvent
 from logic.gate_sources import GateStatusSource
 from vision.types import TrackDet
 from plc.client import PLCClient
@@ -60,7 +60,6 @@ class GateFSM:
       if pos == gs.position:
         gs.stable += 1
       else:
-        logger.info("Gate state change | gate=%s | %s -> %s", gate_name, gs.position, pos)
         gs.position = pos
         gs.stable = 1
 
@@ -68,11 +67,17 @@ class GateFSM:
 
       # Emit on stable transition to open
       if gs.position == "open" and gs.stable == self.stable_frames:
-        tag = self.gate_tags.get(gate_name)
-        if self.plc_signal_on_open and tag:
-          self.plc.pulse(tag, self.pulse_ms)
-        events.append(GateOpenedEvent(gate_name=gate_name, t_open=now))
-        logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
+          tag = self.gate_tags.get(gate_name)
+          if self.plc_signal_on_open and tag:
+              self.plc.pulse(tag, self.pulse_ms)
+
+          events.append(GateOpenedEvent(gate_name=gate_name, t_open=now))
+          logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
+
+      # Emit closed event
+      if gs.position == "closed" and gs.stable == self.stable_frames:
+          events.append(GateClosedEvent(gate_name=gate_name, t_closed=now))
+          logger.info("Gate closed (debounced) | gate=%s | ts=%.3f", gate_name, now)
         
       self.gates[gate_name] = gs
     return events, metrics_by_gate

@@ -143,7 +143,8 @@ class GeometryGateSource(GateStatusSource):
     metrics["w/h"] = round(w_over_h, 2)
 
     # Open if in open ROI AND gate looks tall/narrow AND smaller area vs closed baseline
-    if in_open and (w_over_h < self.max_w_over_h) and (area_ratio < self.max_area_ratio_vs_closed):
+    # if in_open and (w_over_h < self.max_w_over_h) and (area_ratio < self.max_area_ratio_vs_closed):
+    if in_open:
       logger.debug(
         "Gate=open by geometry | gate=%s | conf=%.3f | in_open=%s | w/h=%.3f | area_ratio=%.3f",
         gate_name,

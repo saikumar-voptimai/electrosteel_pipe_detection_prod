@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 import logging
+from ui.formatting import fmt_ts
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,15 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gate_cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  t_gate1_open REAL,
+  t_gate1_close REAL,
+  t_gate2_open REAL,
+  t_gate2_close REAL,
+  created_at REAL DEFAULT (strftime('%s','now'))
+);
+
 """
 
 @dataclass
@@ -178,3 +188,48 @@ class SqliteRepo:
     cur = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,))
     row = cur.fetchone()
     return row[0] if row else default
+  
+  def gate_open(self, gate, ts):
+
+    col = "t_gate1_open" if gate == "gate1" else "t_gate2_open"
+
+    sql = f"""
+    UPDATE gate_cycles
+    SET {col} = ?
+    WHERE id = (
+        SELECT id FROM gate_cycles
+        WHERE t_gate1_close IS NULL
+          OR t_gate2_close IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+    )
+    """
+
+    cur = self.conn.execute(sql, (ts,))
+
+    if cur.rowcount == 0:
+        sql = f"INSERT INTO gate_cycles ({col}) VALUES (?)"
+        self.conn.execute(sql, (ts,))
+
+  def gate_close(self, gate, ts):
+
+    col = "t_gate1_close" if gate == "gate1" else "t_gate2_close"
+
+    sql = f"""
+    UPDATE gate_cycles
+    SET {col} = ?
+    WHERE id = (
+        SELECT id FROM gate_cycles
+        WHERE {col} IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+    )
+    """
+
+    self.conn.execute(sql, (ts,))
+
+
+
+     
+
+

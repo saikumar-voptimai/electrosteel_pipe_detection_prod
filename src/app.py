@@ -27,6 +27,7 @@ from plc.factory import create_plc
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.events import GateClosedEvent, GateOpenedEvent
 from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
@@ -202,8 +203,12 @@ class App:
         # Update gate FSM
         gate_events, gate_metrics = gate_fsm.update(frame=frame_orig, dets=dets_orig)
         for event in gate_events:
-          logger.info(f"Gate opened: {event.gate_name} at {fmt_ts(event.t_open)}")
-          repo.insert_event("gate_open", None, f"{event.gate_name}@{event.t_open:.3f}")
+            if isinstance(event, GateOpenedEvent):
+                repo.gate_open(event.gate_name, event.t_open)
+
+            elif isinstance(event, GateClosedEvent):
+                repo.gate_close(event.gate_name, event.t_closed)
+
 
         # Update pipe FSM (full logic)
         updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
@@ -340,7 +345,7 @@ class App:
           if publish_overlay:
               publisher.publish(vis)        # overlay image
           else:
-              publisher.publish(vis_base, dets=dets_orig, ts=ts, gate_metrics=gate_metrics)   # raw image + txt metadata
+              publisher.publish(vis_base, dets=dets_vis, ts=ts, gate_metrics=gate_metrics)   # raw image + txt metadata
         st5 = time.time()
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:
