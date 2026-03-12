@@ -7,9 +7,50 @@ import numpy as np
 from typing import Tuple
 import logging
 import subprocess
+import gxipy as gx
 from utils.config import CameraCfg
 
 logger = logging.getLogger(__name__)
+
+EXPOSURE_IN_US = 15000.0  # 15ms exposure time in microseconds
+GAIN = 8.0
+GAMMA = 1.92
+
+def persist_camera_settings():
+    device_manager = gx.DeviceManager()
+    dev_num, dev_info_list = device_manager.update_device_list()
+    
+    if dev_num == 0:
+        print("No camera found.")
+        return
+
+    # Open the first camera found
+    cam = device_manager.open_device_by_sn(dev_info_list[0].get_sn())
+
+    try:
+        cam.ExposureTime.set(EXPOSURE_IN_US)
+        cam.Gain.set(GAIN)
+        if hasattr(cam, 'GammaEnable'):
+            cam.GammaEnable.set(True)
+        
+        cam.Gamma.set(GAMMA)
+        print(f"Gamma set to {GAMMA}")
+        cam.UserSetSelector.set(gx.GxUserSetSelectorEntry.USER_SET0)
+        
+        cam.UserSetSave.send_command()
+        print("Settings saved to UserSet0.")
+
+        cam.UserSetDefault.set(gx.GxUserSetDefaultEntry.USER_SET0)
+        print("UserSet0 set as the boot default.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        cam.close_device()
+
+if __name__ == "__main__":
+    persist_camera_settings()
+
 
 @dataclass
 class Capture:

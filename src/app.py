@@ -15,7 +15,7 @@ from utils.config import AppCfg
 from utils.timing import RateLimiter
 from utils.roi_names import REQUIRED_ROIS, as_keys
 
-from camera.capture import Capture
+from camera.capture import Capture, persist_camera_settings
 from geometry.roi import ROIManager
 
 from vision.tracker import YoloByteTrack
@@ -65,7 +65,7 @@ class App:
                 f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs."
             )
 
-    
+    persist_camera_settings()
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
 
@@ -78,6 +78,7 @@ class App:
       logger.info("Weight capture enabled | machine_default=%s", self.cfg.weight.machine_id_default)
 
     rois = ROIManager(self.cfg.rois)
+
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
 
