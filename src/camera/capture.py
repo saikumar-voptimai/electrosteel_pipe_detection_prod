@@ -22,39 +22,39 @@ class Capture:
     _cam: gx.Device | None = field(default=None, init=False)
     _converter: gx.ImageFormatConvert | None = field(default=None, init=False)
 
+    # Camera configuration
     def _apply_camera_settings(self):
-        """Configure Daheng camera parameters using SDK"""
+
         if self._cam is None or self.camera_cfg is None:
             return
 
-        try:
-            remote = self._cam.get_remote_device_feature_control()
+        cam = self._cam
 
+        try:
             logger.info("Applying Daheng camera settings")
 
-            if remote.is_writable("ExposureAuto"):
-                remote.get_enum_feature("ExposureAuto").set("Off")
+            # disable auto exposure
+            if hasattr(cam, "ExposureAuto"):
+                cam.ExposureAuto.set(gx.GxAutoEntry.OFF)
 
-            if remote.is_writable("GainAuto"):
-                remote.get_enum_feature("GainAuto").set("Off")
+            # disable auto gain
+            if hasattr(cam, "GainAuto"):
+                cam.GainAuto.set(gx.GxAutoEntry.OFF)
 
-            if remote.is_writable("ExposureTime"):
-                remote.get_float_feature("ExposureTime").set(
-                    self.camera_cfg.exposure_us
-                )
+            # exposure
+            if hasattr(cam, "ExposureTime"):
+                cam.ExposureTime.set(self.camera_cfg.exposure_us)
 
-            if remote.is_writable("Gain"):
-                remote.get_float_feature("Gain").set(
-                    self.camera_cfg.gain_db
-                )
+            # gain
+            if hasattr(cam, "Gain"):
+                cam.Gain.set(self.camera_cfg.gain_db)
 
-            if remote.is_writable("AcquisitionFrameRateEnable"):
-                remote.get_bool_feature("AcquisitionFrameRateEnable").set(True)
+            # enable FPS control
+            if hasattr(cam, "AcquisitionFrameRateMode"):
+                cam.AcquisitionFrameRateMode.set(gx.GxSwitchEntry.ON)
 
-            if remote.is_writable("AcquisitionFrameRate"):
-                remote.get_float_feature("AcquisitionFrameRate").set(
-                    self.camera_cfg.fps
-                )
+            if hasattr(cam, "AcquisitionFrameRate"):
+                cam.AcquisitionFrameRate.set(self.camera_cfg.fps)
 
             logger.info(
                 "Camera settings applied | exposure=%s us | gain=%s dB | fps=%s",
@@ -66,8 +66,11 @@ class Capture:
         except Exception as e:
             logger.warning("Camera configuration failed: %s", e)
 
+  
+    # Open camera
+
     def open(self) -> None:
-        """Open Daheng camera using gxipy SDK"""
+
         logger.info("Opening Daheng GigE camera via gxipy")
 
         self._device_manager = gx.DeviceManager()
@@ -79,26 +82,30 @@ class Capture:
 
         logger.info("Detected cameras: %s", dev_info_list)
 
-        sn = dev_info_list[0].get("sn")
+        sn = dev_info_list[0]["sn"]
 
         self._cam = self._device_manager.open_device_by_sn(sn)
 
+        # configure camera
         self._apply_camera_settings()
 
+        # start stream
         self._cam.stream_on()
 
-        self._converter = self._device_manager.create_image_format_convert()
-
+        # correct converter creation
+        self._converter = gx.ImageFormatConvert()
         self._converter.set_dest_format(gx.GxPixelFormatEntry.RGB8)
         self._converter.set_valid_bits(gx.DxValidBit.BIT4_11)
 
         logger.info("Camera stream started")
 
+        # warmup frames
         for _ in range(max(0, int(self.warmup_frames))):
             self._cam.data_stream[0].get_image()
 
+    # Read frame
+
     def read(self) -> Tuple[np.ndarray, float] | None:
-        """Capture frame from camera"""
 
         if self._cam is None:
             self.open()
@@ -115,66 +122,42 @@ class Capture:
 
             self._converter.convert(raw, rgb_array, buffer_size, False)
 
-            img = np.frombuffer(
-                rgb_array,
-                dtype=np.uint8,
-                count=buffer_size
-            )
+            img = np.frombuffer(rgb_array, dtype=np.uint8)
 
             img = img.reshape(
                 raw.frame_data.height,
                 raw.frame_data.width,
                 3
             )
-            # Convert RGB to BGR for OpenCV compatibility
+
+            # RGB → BGR for OpenCV
             img = img[:, :, ::-1]
 
             return img, time.time()
 
         except Exception as e:
+
             logger.warning("Capture read failed: %s", e)
 
-        logger.warning("Attempting reconnect")
+            logger.warning("Attempting reconnect")
 
-        self.close()
-        time.sleep(self.reconnect_sleep_s)
+            self.close()
+            time.sleep(self.reconnect_sleep_s)
 
-        try:
-            self.open()
-            raw = self._cam.data_stream[0].get_image()
+            try:
+                self.open()
+                return self.read()
 
-            if raw is None:
+            except Exception:
+                logger.error("Capture read failed after reconnect")
                 return None
 
-            buffer_size = self._converter.get_buffer_size_for_conversion(raw)
-
-            rgb_array = (gx.c_ubyte * buffer_size)()
-
-            self._converter.convert(raw, rgb_array, buffer_size, False)
-
-            img = np.frombuffer(
-                rgb_array,
-                dtype=np.uint8,
-                count=buffer_size
-            )
-
-            img = img.reshape(
-                raw.frame_data.height,
-                raw.frame_data.width,
-                3
-            )
-            # Convert RGB to BGR for OpenCV compatibility
-            img = img[:, :, ::-1]
-            return img, time.time()
-
-        except Exception:
-            logger.error("Capture read failed after reconnect")
-            return None
+    # Close camera
 
     def close(self) -> None:
-        """Close camera connection"""
 
         if self._cam is not None:
+
             logger.info("Closing Daheng camera")
 
             try:
