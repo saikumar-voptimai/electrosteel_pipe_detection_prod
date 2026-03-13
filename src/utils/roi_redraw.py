@@ -5,7 +5,7 @@ from typing import Any
 def _load_camera_cfg(camera_cfg_path: str):
     try:
         import yaml
-        from utils.config import CameraCfg
+        from utils.config import CameraCfg, CameraProfileCfg
     except Exception:
         return None
 
@@ -15,20 +15,35 @@ def _load_camera_cfg(camera_cfg_path: str):
 
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     cam = (raw.get("camera") if isinstance(raw, dict) else None) or (raw or {})
+
     if not isinstance(cam, dict) or not cam:
         return None
+
+    profiles_raw = cam.get("profiles", {}) or {}
+
+    profiles = None
+    if profiles_raw:
+        profiles = {
+            name: CameraProfileCfg(
+                start=str(p["start"]),
+                end=str(p["end"]),
+                exposure_us=int(p["exposure_us"]),
+                gain_db=int(p["gain_db"]),
+                gamma_enable=bool(p.get("gamma_enable", True)),
+                gamma=float(p.get("gamma", 1.0)),
+            )
+            for name, p in profiles_raw.items()
+        }
 
     return CameraCfg(
         id=cam.get("id", 0),
         width=int(cam.get("width", 960)),
         height=int(cam.get("height", 640)),
         fps=int(cam.get("fps", 8)),
-        exposure_us=int(cam.get("exposure_us", 15000)),
-        gain_db=int(cam.get("gain_db", 5)),
         auto_exposure=bool(cam.get("auto_exposure", False)),
         auto_gain=bool(cam.get("auto_gain", False)),
+        profiles=profiles,
     )
-
 
 def run_roi_redraw(video_source: int | str, rois_path: str, camera_cfg_path: str = "config/camera.yaml") -> None:
     """
