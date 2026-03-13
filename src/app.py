@@ -32,6 +32,7 @@ from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
 from ui.formatting import fmt_ts
+from utils.camera_scheduler import CameraProfileScheduler
 
 logger = logging.getLogger("pipe_detect")
 
@@ -65,8 +66,6 @@ class App:
             raise RuntimeError(
                 f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs."
             )
-
-    persist_camera_settings()
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
 
@@ -81,6 +80,14 @@ class App:
     rois = ROIManager(self.cfg.rois)
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
+    # Start camera profile scheduler. 
+    scheduler = None
+    if self.cfg.camera_cfg and self.cfg.camera_cfg.profiles:
+        scheduler = CameraProfileScheduler(
+            capture,
+            self.cfg.camera_cfg.profiles
+        )
+        scheduler.start()
 
     tracker = YoloByteTrack(
         model_path=self.cfg.runtime.model_path,
@@ -373,6 +380,11 @@ class App:
       try:
         repo.commit()
         repo.close()
+      except Exception:
+        pass
+      try:
+        if scheduler:
+          scheduler.stop()
       except Exception:
         pass
       try:

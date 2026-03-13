@@ -2,10 +2,30 @@
 # THe camera currently uses GStream and Aravis drivers
 camera:
   id: "Daheng Imaging-MER2-630-18GC-P-FBJ24120608"
+
   width: 2620
-  height: 1216 # Match these to the runtime publish_imgsz aspect ratio
+  height: 1216
   fps: 8
-  exposure_us: 15000 # 15 ms
-  gain_db: 5         # 0 to 30 dB
+
+  profiles:
+
+    day:
+      start: "06:00"
+      end: "18:00"
+
+      exposure_us: 15000
+      gain_db: 5
+      gamma_enable: true
+      gamma: 0.8
+
+    night:
+      start: "18:00"
+      end: "06:00"
+
+      exposure_us: 30000
+      gain_db: 12
+      gamma_enable: true
+      gamma: 1.4
+
   auto_exposure: false
   auto_gain: false

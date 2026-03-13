@@ -9,15 +9,24 @@ Point = Tuple[int, int]
 Polygon = List[Point]
 
 @dataclass(frozen=True)
+class CameraProfileCfg:
+    start: str
+    end: str
+    exposure_us: int
+    gain_db: int
+    gamma_enable: bool
+    gamma: float
+
+
+@dataclass(frozen=True)
 class CameraCfg:
     id: int | str
     width: int
     height: int
     fps: int
-    exposure_us: int
-    gain_db: int
     auto_exposure: bool
     auto_gain: bool
+    profiles: Dict[str, CameraProfileCfg] | None = None
 
 
 @dataclass(frozen=True)
@@ -148,17 +157,30 @@ def load_config(
 
     cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
     camera_cfg: CameraCfg | None = None
-    # Camera config is optional unless runtime.video_source is "gige".
+
     if cam:
+        profiles_raw = dict(cam.get("profiles", {}) or {})
+        profiles: Dict[str, CameraProfileCfg] | None = None
+        if profiles_raw:
+            profiles = {
+                str(name): CameraProfileCfg(
+                    start=str(p["start"]),
+                    end=str(p["end"]),
+                    exposure_us=int(p["exposure_us"]),
+                    gain_db=int(p["gain_db"]),
+                    gamma_enable=bool(p.get("gamma_enable", True)),
+                    gamma=float(p.get("gamma", 1.0)),
+                )
+                for name, p in profiles_raw.items()
+            }
         camera_cfg = CameraCfg(
             id=cam.get("id", 0),
             width=int(cam.get("width", 960)),
             height=int(cam.get("height", 640)),
             fps=int(cam.get("fps", 8)),
-            exposure_us=int(cam.get("exposure_us", 15000)),
-            gain_db=int(cam.get("gain_db", 5)),
             auto_exposure=bool(cam.get("auto_exposure", False)),
             auto_gain=bool(cam.get("auto_gain", False)),
+            profiles=profiles,
         )
 
     gate_raw = r.get("gate", {}) or {}
