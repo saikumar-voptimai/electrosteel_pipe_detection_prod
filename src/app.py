@@ -66,7 +66,7 @@ class App:
                 f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs."
             )
 
-    
+    persist_camera_settings()
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
 
@@ -236,29 +236,25 @@ class App:
         logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
 
         # Persist any finalized weights (done in background thread)
-        # if weight_service is not None:
-        #   for fin in weight_service.drain_results():
-        #     w = fin.result.weight
-        #     # w = 250+20*np.random.rand()   # simulate some noise in weight readings
-        #     # quality = 90+10*np.random.rand()   # simulate some noise in quality readings
-        #     # samples = int(3+5*np.random.rand())   # simulate some noise in sample count
-        #     repo.upsert_pipe({
-        #       "pipe_uid": fin.pipe_uid,
-        #       "weight": w,
-        #       "weight_quality": quality,
-        #       "weight_samples": samples,
-        #     })
-        #     repo.insert_event(
-        #       "weight_captured",
-        #       fin.pipe_uid,
-        #       f"weight={w} quality={quality} samples={samples} reason={fin.reason}",
-        #     )
+        if weight_service is not None:
+          for fin in weight_service.drain_results():
+            w = fin.result.weight
+            quality = fin.result.quality
+            samples = fin.result.samples
+            repo.upsert_pipe({
+              "pipe_uid": fin.pipe_uid,
+              "weight": w,
+              "weight_quality": quality,
+              "weight_samples": samples,
+            })
+            repo.insert_event(
+              "weight_captured",
+              fin.pipe_uid,
+              f"weight={w} quality={quality} samples={samples} reason={fin.reason}",
+            )
         
         # Upsert updated pipes
         for p in updated_pipes:
-          # w = 250+20*np.random.rand()   # simulate some noise in weight readings
-          # quality = 90+10*np.random.rand()   # simulate some noise in quality readings
-          # samples = int(3+5*np.random.rand())   # simulate some noise in sample count
           avg_full = (p.conf_sum_full / p.conf_count_full) if p.conf_count_full > 0 else 0.0
           avg_till_gate = (p.conf_sum_till_gate / p.conf_count_till_gate) if p.conf_count_till_gate > 0 else 0.0
           repo.upsert_pipe({
@@ -266,9 +262,6 @@ class App:
             "tracker_id": p.tracker_id,
             "origin": p.origin,
             "state": p.state,
-            # "weight": w,
-            # "weight_quality": quality,
-            # "weight_samples": samples,
             "t_origin": p.t_origin,
             "t_loadcell_enter": p.t_loadcell_enter,
             "t_loadcell_exit": p.t_loadcell_exit,
@@ -393,7 +386,6 @@ class App:
         pass
       try:
         capture.close()
-        capture._cap.release()
       except Exception:
         pass
       cv2.destroyAllWindows()

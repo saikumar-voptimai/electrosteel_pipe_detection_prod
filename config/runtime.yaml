@@ -1,6 +1,6 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: test1.mp4 # tests/videos/{video.mp4/.avi} | "gige"
-model_path: models/yolo/yolo11n_26_9_3.pt
+video_source: test31.mp4 # tests/videos/{video.mp4/.avi} | "gige"
+model_path: models/yolo/yolo11_26_11_3.1.pt
 tracker_yaml: "config/bytetrack.yaml"
 
 debug_mode: true
@@ -46,7 +46,7 @@ history:
 
 
 db_flush_interval_s: 5.0            # batch DB commits for Pi
-run_headless: false                  # disable display window
+run_headless: false                 # disable display window
 
 origin_confirm_frames: 5
 loadcell_enter_confirm_frames: 3    # you said first entry; 2 is safer

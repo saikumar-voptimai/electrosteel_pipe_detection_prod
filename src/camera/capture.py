@@ -1,167 +1,186 @@
 from __future__ import annotations
 import time
-from dataclasses import dataclass
-from dataclasses import field
-import cv2
-import numpy as np
+from dataclasses import dataclass, field
 from typing import Tuple
+import numpy as np
 import logging
-import subprocess
+import gxipy as gx
+
 from utils.config import CameraCfg
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class Capture:
-  source: int | str
-  camera_cfg: CameraCfg | None = None
-  reconnect_sleep_s: float = 1.0
-  warmup_frames: int = 10
+    source: str
+    camera_cfg: CameraCfg | None = None
+    reconnect_sleep_s: float = 1.0
+    warmup_frames: int = 10
 
+    _device_manager: gx.DeviceManager | None = field(default=None, init=False)
+    _cam: gx.Device | None = field(default=None, init=False)
+    _converter: gx.ImageFormatConvert | None = field(default=None, init=False)
 
-  _cap: cv2.VideoCapture | None = field(default=None, init=False)
-  def _apply_camera_settings(self):
-    """
-    Configure Daheng camera parameters via arv-tool
-    """
-    try:
-        logger.info("Applying camera parameters via arv-tool")
+    def _apply_camera_settings(self):
+        """Configure Daheng camera parameters using SDK"""
+        if self._cam is None or self.camera_cfg is None:
+            return
 
-        subprocess.run(["arv-tool-0.10", "control", "ExposureAuto=Off"], check=False)
-        subprocess.run(["arv-tool-0.10", "control", "GainAuto=Off"], check=False)
+        try:
+            remote = self._cam.get_remote_device_feature_control()
 
-        subprocess.run([
-            "arv-tool-0.10", "control",
-            f"ExposureTime={self.camera_cfg.exposure_us}"
-        ], check=False)
+            logger.info("Applying Daheng camera settings")
 
-        subprocess.run([
-            "arv-tool-0.10", "control",
-            f"Gain={self.camera_cfg.gain_db}"
-        ], check=False)
+            if remote.is_writable("ExposureAuto"):
+                remote.get_enum_feature("ExposureAuto").set("Off")
 
-        subprocess.run(["arv-tool-0.10", "control", "GammaEnable=1"], check=False)
-        subprocess.run(["arv-tool-0.10", "control", "GammaMode=sRGB"], check=False)
+            if remote.is_writable("GainAuto"):
+                remote.get_enum_feature("GainAuto").set("Off")
 
-        subprocess.run(["arv-tool-0.10", "control", "AcquisitionFrameRateMode=On"], check=False)
-        subprocess.run([
-            "arv-tool-0.10", "control",
-            f"AcquisitionFrameRate={self.camera_cfg.fps}"
-        ], check=False)
+            if remote.is_writable("ExposureTime"):
+                remote.get_float_feature("ExposureTime").set(
+                    self.camera_cfg.exposure_us
+                )
 
-        logger.info(
-            "Camera settings applied | exposure=%s us | gain=%s dB | gamma=sRGB",
-            self.camera_cfg.exposure_us,
-            self.camera_cfg.gain_db
-        )
+            if remote.is_writable("Gain"):
+                remote.get_float_feature("Gain").set(
+                    self.camera_cfg.gain_db
+                )
 
-    except Exception as e:
-        logger.warning("Camera configuration failed: %s", e)
+            if remote.is_writable("AcquisitionFrameRateEnable"):
+                remote.get_bool_feature("AcquisitionFrameRateEnable").set(True)
 
+            if remote.is_writable("AcquisitionFrameRate"):
+                remote.get_float_feature("AcquisitionFrameRate").set(
+                    self.camera_cfg.fps
+                )
 
-  def open(self) -> None:
-    """
-    Opens the video capture source.
-    """
-    if isinstance(self.source, str) and self.source.startswith("gige"):
-      logger.info("Opening GigE camera via GStreamer Aravis: %s", self.source)
+            logger.info(
+                "Camera settings applied | exposure=%s us | gain=%s dB | fps=%s",
+                self.camera_cfg.exposure_us,
+                self.camera_cfg.gain_db,
+                self.camera_cfg.fps
+            )
 
-      if self.camera_cfg is None:
-        raise RuntimeError(
-          "video_source is 'gige' but no camera_cfg was provided. "
-          "Check config/camera.yaml and main.py --camera argument."
-        )
+        except Exception as e:
+            logger.warning("Camera configuration failed: %s", e)
 
-      # Release existing camera uses if any with pkill
-      # Note: these tools are typically available on Linux; make this best-effort.
-      try:
-        subprocess.run(["pkill", "-f", "arv-viewer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-        subprocess.run(["pkill", "-f", "arv-test"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-        subprocess.run(["pkill", "-f", "gst-launch-1.0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-      except FileNotFoundError:
-        logger.debug("Process cleanup tools not found; skipping pkill")
+    def open(self) -> None:
+        """Open Daheng camera using gxipy SDK"""
+        logger.info("Opening Daheng GigE camera via gxipy")
 
-      # List cameras and see "Daheng" exists in the output. Also log.
-      # Apply camera configuration
-      self._apply_camera_settings()
-      try:
-        output = subprocess.run(
-          ["arv-tool-0.10", "list"],
-          capture_output=True,
-          text=True,
-        )
-        if "daheng" in (output.stdout or "").lower():
-          logger.info("Daheng camera detected:\n%s", output.stdout)
-      except FileNotFoundError:
-        logger.debug("arv-tool-0.10 not found; skipping camera list")
-      
-      pipeline = (
-          f"aravissrc ! "
-          "bayer2rgb ! "
-          "videoconvert ! "
-          f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1,format=BGR ! "
-          "appsink drop=true max-buffers=1 sync=false"
-      )
+        self._device_manager = gx.DeviceManager()
 
-      self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-      if not self._cap.isOpened():
-        raise RuntimeError(
-          f"Cannot open GigE camera via GStreamer: {self.source}"
-          "Check: gst-inspect-1.0 aravissrc, GST_PLUGIN_PATH, and camera connectivity.")
+        dev_num, dev_info_list = self._device_manager.update_all_device_list()
 
-    else:
-      self._cap = cv2.VideoCapture(self.source)
-      logger.info("Opening video source: %s", self.source)
-      if not self._cap.isOpened():
-        raise RuntimeError(f"Cannot open video source: {self.source}")
-          
+        if dev_num == 0:
+            raise RuntimeError("No Daheng camera detected")
 
-    try:
-      fps = self._cap.get(cv2.CAP_PROP_FPS)
-      w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-      h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-      frames = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
-      logger.info("Capture opened | fps=%.2f | size=%dx%d | frame_count=%s", fps, w, h, frames if frames > 0 else "?")
-    except Exception:
-      logger.debug("Could not read capture properties", exc_info=True)
+        logger.info("Detected cameras: %s", dev_info_list)
 
-    # Warmup (single place to avoid skipping extra frames)
-    for _ in range(max(0, int(self.warmup_frames))):
-      self._cap.read()
+        sn = dev_info_list[0].get("sn")
 
+        self._cam = self._device_manager.open_device_by_sn(sn)
 
-  def read(self) -> Tuple[np.ndarray, float] | None:
-    """
-    Reads a frame from the capture source.
-    Returns (frame, timestamp) or None if failed.
-    """
-    if self._cap is None:
-      self.open()
+        self._apply_camera_settings()
 
-    ok, frame = self._cap.read()
-    if ok and frame is not None:
-      return frame, time.time()
-    
-    # Try reconnect
-    #TODO: Code duplication? Run retries in a loop?
-    logger.warning("Capture read failed; reconnecting | source=%s", self.source)
-    self.close()
-    time.sleep(self.reconnect_sleep_s)
-    self.open()
-    ok, frame = self._cap.read()
-    if ok and frame is not None:
-      return frame, time.time()
-    logger.error("Capture read failed after reconnect | source=%s", self.source)
-    return None
-  
-  def close(self) -> None:
-    """
-    Closes the video capture if it is open.
-    """
-    if self._cap is not None:
-      logger.info("Closing video capture")
-      self._cap.release()
-      self._cap = None
+        self._cam.stream_on()
+
+        self._converter = self._device_manager.create_image_format_convert()
+
+        self._converter.set_dest_format(gx.GxPixelFormatEntry.RGB8)
+        self._converter.set_valid_bits(gx.DxValidBit.BIT4_11)
+
+        logger.info("Camera stream started")
+
+        for _ in range(max(0, int(self.warmup_frames))):
+            self._cam.data_stream[0].get_image()
+
+    def read(self) -> Tuple[np.ndarray, float] | None:
+        """Capture frame from camera"""
+
+        if self._cam is None:
+            self.open()
+
+        try:
+            raw = self._cam.data_stream[0].get_image()
+
+            if raw is None:
+                return None
+
+            buffer_size = self._converter.get_buffer_size_for_conversion(raw)
+
+            rgb_array = (gx.c_ubyte * buffer_size)()
+
+            self._converter.convert(raw, rgb_array, buffer_size, False)
+
+            img = np.frombuffer(
+                rgb_array,
+                dtype=np.uint8,
+                count=buffer_size
+            )
+
+            img = img.reshape(
+                raw.frame_data.height,
+                raw.frame_data.width,
+                3
+            )
+            # Convert RGB to BGR for OpenCV compatibility
+            img = img[:, :, ::-1]
+
+            return img, time.time()
+
+        except Exception as e:
+            logger.warning("Capture read failed: %s", e)
+
+        logger.warning("Attempting reconnect")
+
+        self.close()
+        time.sleep(self.reconnect_sleep_s)
+
+        try:
+            self.open()
+            raw = self._cam.data_stream[0].get_image()
+
+            if raw is None:
+                return None
+
+            buffer_size = self._converter.get_buffer_size_for_conversion(raw)
+
+            rgb_array = (gx.c_ubyte * buffer_size)()
+
+            self._converter.convert(raw, rgb_array, buffer_size, False)
+
+            img = np.frombuffer(
+                rgb_array,
+                dtype=np.uint8,
+                count=buffer_size
+            )
+
+            img = img.reshape(
+                raw.frame_data.height,
+                raw.frame_data.width,
+                3
+            )
+            # Convert RGB to BGR for OpenCV compatibility
+            img = img[:, :, ::-1]
+            return img, time.time()
+
+        except Exception:
+            logger.error("Capture read failed after reconnect")
+            return None
+
+    def close(self) -> None:
+        """Close camera connection"""
+
+        if self._cam is not None:
+            logger.info("Closing Daheng camera")
+
+            try:
+                self._cam.stream_off()
+                self._cam.close_device()
+            except Exception:
+                pass
+
+            self._cam = None
