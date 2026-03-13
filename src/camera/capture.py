@@ -20,7 +20,6 @@ class Capture:
 
     _device_manager: gx.DeviceManager | None = field(default=None, init=False)
     _cam: gx.Device | None = field(default=None, init=False)
-    _converter: gx.ImageFormatConvert | None = field(default=None, init=False)
 
     # Camera configuration
     def _apply_camera_settings(self):
@@ -33,23 +32,18 @@ class Capture:
         try:
             logger.info("Applying Daheng camera settings")
 
-            # disable auto exposure
             if hasattr(cam, "ExposureAuto"):
                 cam.ExposureAuto.set(gx.GxAutoEntry.OFF)
 
-            # disable auto gain
             if hasattr(cam, "GainAuto"):
                 cam.GainAuto.set(gx.GxAutoEntry.OFF)
 
-            # exposure
             if hasattr(cam, "ExposureTime"):
                 cam.ExposureTime.set(self.camera_cfg.exposure_us)
 
-            # gain
             if hasattr(cam, "Gain"):
                 cam.Gain.set(self.camera_cfg.gain_db)
 
-            # enable FPS control
             if hasattr(cam, "AcquisitionFrameRateMode"):
                 cam.AcquisitionFrameRateMode.set(gx.GxSwitchEntry.ON)
 
@@ -66,7 +60,7 @@ class Capture:
         except Exception as e:
             logger.warning("Camera configuration failed: %s", e)
 
-  
+
     # Open camera
 
     def open(self) -> None:
@@ -86,22 +80,18 @@ class Capture:
 
         self._cam = self._device_manager.open_device_by_sn(sn)
 
-        # configure camera
         self._apply_camera_settings()
 
-        # start stream
         self._cam.stream_on()
-
-        # correct converter creation
-        self._converter = gx.ImageFormatConvert()
-        self._converter.set_dest_format(gx.GxPixelFormatEntry.RGB8)
-        self._converter.set_valid_bits(gx.DxValidBit.BIT4_11)
 
         logger.info("Camera stream started")
 
         # warmup frames
         for _ in range(max(0, int(self.warmup_frames))):
-            self._cam.data_stream[0].get_image()
+            img = self._cam.data_stream[0].get_image()
+            if img is not None:
+                img.convert("RGB")
+
 
     # Read frame
 
@@ -116,19 +106,12 @@ class Capture:
             if raw is None:
                 return None
 
-            buffer_size = self._converter.get_buffer_size_for_conversion(raw)
+            rgb = raw.convert("RGB")
 
-            rgb_array = (gx.c_ubyte * buffer_size)()
+            img = rgb.get_numpy_array()
 
-            self._converter.convert(raw, rgb_array, buffer_size, False)
-
-            img = np.frombuffer(rgb_array, dtype=np.uint8)
-
-            img = img.reshape(
-                raw.frame_data.height,
-                raw.frame_data.width,
-                3
-            )
+            if img is None:
+                return None
 
             # RGB → BGR for OpenCV
             img = img[:, :, ::-1]
@@ -138,7 +121,6 @@ class Capture:
         except Exception as e:
 
             logger.warning("Capture read failed: %s", e)
-
             logger.warning("Attempting reconnect")
 
             self.close()
