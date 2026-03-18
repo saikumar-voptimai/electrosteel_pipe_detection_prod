@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from utils.roi_names import RoiName
-
+import logging
 import cv2
 import numpy as np
 import yaml
-
+logger = logging.getLogger(__name__)
 Point = Tuple[int, int]
 
 Polygon4 = List[Point] # List of 4 (x,y) points
@@ -41,6 +41,7 @@ class ROIWizardConfig:
   warmup_frames: int = 10 # grab a stable camera frame or skip using next
   font_scale: float = 0.7
   font_thickness: int = 2
+  
 
 
 class ROIRedrawWizard:
@@ -54,6 +55,10 @@ class ROIRedrawWizard:
   def __init__(self, cfg: ROIWizardConfig, specs: List[ROISpec]) -> None:
     self.cfg = cfg
     self.specs = specs
+    self._existing_rois = {}
+    if Path(self.cfg.rois_path).exists():
+        with open(self.cfg.rois_path, "r") as f:
+            self._existing_rois = yaml.safe_load(f) or {}
 
     self._frame_orig: Optional[np.ndarray] = None
     self._frame_disp: Optional[np.ndarray] = None
@@ -65,7 +70,12 @@ class ROIRedrawWizard:
     # Stored ROIs (orig coordinates) + *(disp coordinates for visualization)
     self._rois_orig: Dict[str, Polygon4] = {}
     self._rois_disp: Dict[str, Polygon4] = {}
-
+  def _orig_to_disp(self, p: Point) -> Point:
+    if self._scale <= 0:
+        return p
+    dx = int(round(p[0] * self._scale))
+    dy = int(round(p[1] * self._scale))
+    return (dx, dy)
   def run(self) -> None:
     """
     Runs the ROI redraw wizard.
@@ -91,6 +101,23 @@ class ROIRedrawWizard:
       
       if key == ord("c"): # clear current
         self._current_points_disp.clear()
+
+      if key == ord('n'):  # skip current ROI
+        spec = self.specs[self._idx]
+        if spec.name in self._existing_rois:
+            pts_orig = self._existing_rois[spec.name]
+            pts_disp = [self._orig_to_disp(tuple(p)) for p in pts_orig]
+
+            self._rois_orig[spec.name] = pts_orig
+            self._rois_disp[spec.name] = pts_disp
+
+            logger.info(f"Skipping {spec.name}, using existing ROI")
+        else:
+            logger.warning(f"No existing ROI found for {spec.name}, skipping empty")
+        self._current_points_disp.clear()
+        self._idx += 1
+        if self._idx >= len(self.specs):
+            break
       
       if key in (13, 10): # enter key
         if len(self._current_points_disp) == 4:
@@ -282,11 +309,11 @@ def default_roi_specs() -> List[ROISpec]:
     ROISpec(RoiName.CASTER_ORIGIN.value, (255, 255, 0), "Caster origin zone: includes, caster, trolley-end-area upto gate1."),
     ROISpec(RoiName.LEFT_ORIGIN.value,     (0, 165, 255), "Left origin/exclusion: pipes here are ignored. If originating here origin='other'."),
     ROISpec(RoiName.RIGHT_ORIGIN.value,    (255, 0, 255), "Right origin/exclusion: pipes here are ignored. If originating here origin='other'."),
-    ROISpec(RoiName.SAFETY_CRITICAL.value, (0, 0, 255),   "Safety zone: human detection inside this ROI is flagged/used for occlusion checks."),
     ROISpec(RoiName.GATE1_CLOSED.value,    (255, 0, 0),   "Gate1 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
     ROISpec(RoiName.GATE1_OPEN.value,      (0, 255, 0),   "Gate1 open ROI tall-narrow: gate should land here when open."),
     ROISpec(RoiName.GATE2_CLOSED.value,    (128, 0, 0),   "Gate2 closed reference ROI (4-pt box). Used as baseline for geometry checks."),
-    ROISpec(RoiName.GATE2_OPEN.value,      (0, 128, 0),   "Gate2 open ROI tall-narrow: gate should land here when open.")
+    ROISpec(RoiName.GATE2_OPEN.value,      (0, 128, 0),   "Gate2 open ROI tall-narrow: gate should land here when open."),
+    ROISpec(RoiName.SAFETY_CRITICAL.value, (0, 0, 255),   "Safety zone: human detection inside this ROI is flagged/used for occlusion checks."),
     ]
 
                                                    

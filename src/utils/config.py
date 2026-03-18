@@ -16,7 +16,10 @@ class CameraProfileCfg:
     gain_db: int
     gamma_enable: bool
     gamma: float
-
+@dataclass(frozen=True)
+class CameraReconnectCfg:
+    max_retries: int = 5
+    sleep_s: float = 1.0
 
 @dataclass(frozen=True)
 class CameraCfg:
@@ -27,6 +30,7 @@ class CameraCfg:
     auto_exposure: bool
     auto_gain: bool
     profiles: Dict[str, CameraProfileCfg] | None = None
+    reconnect: CameraReconnectCfg | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +177,12 @@ def load_config(
                 )
                 for name, p in profiles_raw.items()
             }
+            reconnect_raw = cam.get("reconnect", {}) or {}
+
+        reconnect_cfg = CameraReconnectCfg(
+            max_retries=int(reconnect_raw.get("max_retries", 5)),
+            sleep_s=float(reconnect_raw.get("sleep_s", 1.0)),
+        )
         camera_cfg = CameraCfg(
             id=cam.get("id", 0),
             width=int(cam.get("width", 960)),
@@ -181,6 +191,7 @@ def load_config(
             auto_exposure=bool(cam.get("auto_exposure", False)),
             auto_gain=bool(cam.get("auto_gain", False)),
             profiles=profiles,
+            reconnect=reconnect_cfg,
         )
 
     gate_raw = r.get("gate", {}) or {}

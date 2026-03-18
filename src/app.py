@@ -86,6 +86,7 @@ class App:
         scheduler = CameraProfileScheduler(
             capture,
             self.cfg.camera_cfg.profiles
+            and capture._is_gige()
         )
         scheduler.start()
 
