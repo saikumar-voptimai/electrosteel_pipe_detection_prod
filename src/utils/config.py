@@ -32,7 +32,7 @@ class GateRuntimeCfg:
 
 @dataclass(frozen=True)
 class RuntimeCfg:
-    degbug_mode: bool
+    debug_mode: bool
 
     video_source: int | str
     model_path: str
