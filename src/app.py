@@ -110,6 +110,7 @@ class App:
       stale_track_frames=self.cfg.runtime.stale_track_frames,
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
       min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
+      loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
     )
 
     # Gate source switching via DB setting
