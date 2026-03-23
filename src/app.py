@@ -82,11 +82,11 @@ class App:
     capture.open()
     # Start camera profile scheduler. 
     scheduler = None
-    if self.cfg.camera_cfg and self.cfg.camera_cfg.profiles:
+
+    if self.cfg.camera_cfg and self.cfg.camera_cfg.profiles and capture._is_gige():
         scheduler = CameraProfileScheduler(
             capture,
             self.cfg.camera_cfg.profiles
-            and capture._is_gige()
         )
         scheduler.start()
 
