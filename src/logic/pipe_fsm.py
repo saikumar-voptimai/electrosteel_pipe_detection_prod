@@ -30,6 +30,8 @@ class PipeFlowFSM:
     rearm_empty_frames: int = 10
     min_pipe_gap_seconds: int = 15
     loadcell_covered_per: int = 90
+    pipe_lost_frames: int = 2
+    pipe_reconnect_window_sec: int = 3
 
     pipes: Dict[int, PipeStats] = None
     seq: int = 0
@@ -43,6 +45,7 @@ class PipeFlowFSM:
         if self.pipes is None:
             self.pipes = {}
         self.last_caster_pipe = None
+        self.recent_lost_pipes = []
 
     # loadcell coverage area (e.g., 90%)
     def loadcell_covered_percentage(self, bbox):
@@ -50,6 +53,10 @@ class PipeFlowFSM:
         xs, ys = zip(*r)
         ix = max(0, min(max(xs), bbox.x2) - max(min(xs), bbox.x1))
         iy = max(0, min(max(ys), bbox.y2) - max(min(ys), bbox.y1))
+
+        result = (ix * iy) / ((max(xs) - min(xs)) * (max(ys) -
+                                                     min(ys))) >= self.loadcell_covered_per / 100.0
+        # print(result)
         return (ix * iy) / ((max(xs) - min(xs)) * (max(ys) - min(ys))) >= self.loadcell_covered_per / 100.0
 
     # UID generation logic with reuse based on time gap
@@ -57,29 +64,27 @@ class PipeFlowFSM:
         self.seq += 1
         return f"caster_{int(time.time())}_{self.seq:06d}"
 
-
     def update(self, frame_idx: int, ts: float, dets: List[TrackDet]):
 
         updated: List[PipeStats] = []
         events: List[object] = []
 
-
         # Check loadcell empty for rearm
         any_pipe_in_loadcell = False
         for d in dets:
-          if d.cls_name != "pipe" or d.track_id is None:
-              continue
+            if d.cls_name != "pipe" or d.track_id is None:
+                continue
 
-          cx, cy = d.bbox.centroid()
+            cx, cy = d.bbox.centroid()
 
-          # Skip if in origin ROIs to avoid false negatives when pipes are first detected in loadcell area but are actually still in origin area
-          if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or \
-            self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
-              continue
+            # skips pipe comes from left or righ origin
+            if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or \
+                    self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
+                continue
 
-          if self.loadcell_covered_percentage(d.bbox):
-              any_pipe_in_loadcell = True
-              break
+            if self.loadcell_covered_percentage(d.bbox):
+                any_pipe_in_loadcell = True
+                break
         if any_pipe_in_loadcell:
             self.loadcell_empty_streak = 0
         else:
@@ -90,6 +95,12 @@ class PipeFlowFSM:
                 logger.info("Loadcell re-armed")
 
         # Process detections
+        #  EARLY LOST PIPE DETECTION
+        for tid, p in list(self.pipes.items()):
+            if frame_idx - p.last_seen_frame > self.pipe_lost_frames:
+                if p not in self.recent_lost_pipes:
+                    logger.info("Pipe marked as lost | uid=%s", p.pipe_uid)
+                    self.recent_lost_pipes.append(p)
 
         for d in dets:
 
@@ -98,8 +109,22 @@ class PipeFlowFSM:
 
             tid = int(d.track_id)
             cx, cy = d.bbox.centroid()
+            if self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy) or self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy):
+                continue
 
             p = self.pipes.get(tid)
+            # logger.info(p)
+            #  MATCH WITH RECENT LOST PIPE UID
+            if p is None:
+                for old in getattr(self, "recent_lost_pipes", []):
+                    # logger.info(self.recent_lost_pipes)
+                    if ts - old.last_seen_ts <= self.pipe_reconnect_window_sec:
+                        # TODO : add distance information 
+                        p = old
+                        p.tracker_id = tid  # assign new track id
+                        self.recent_lost_pipes.remove(old)
+                        logger.info("Re-linked lost pipe | uid=%s", p.pipe_uid)
+                        break
 
             # Create temporary track (no UID yet)
             if p is None:
@@ -235,48 +260,51 @@ class PipeFlowFSM:
 
             self.pipes[tid] = p
             if p.pipe_uid is not None:
-              updated.append(p)
+                updated.append(p)
 
-        # ----------------------------------------------------
         # Cleanup stale tracks
-        # ----------------------------------------------------
         stale_ids = [
             tid for tid, p in self.pipes.items()
             if frame_idx - p.last_seen_frame > self.stale_track_frames
         ]
 
         for tid in stale_ids:
-          p = self.pipes[tid]
+            p = self.pipes[tid]
 
-          logger.debug(
-              "Stale track cleanup | tid=%d | uid=%s | last_seen_frame=%d",
-              tid,
-              p.pipe_uid,
-              p.last_seen_frame
-          )
-          # If pipe entered loadcell but never exited, consider it exited
-          if p.t_loadcell_enter is not None and p.t_loadcell_exit is None:
+            logger.debug(
+                "Stale track cleanup | tid=%d | uid=%s | last_seen_frame=%d",
+                tid,
+                p.pipe_uid,
+                p.last_seen_frame
+            )
+            # If pipe entered loadcell but never exited, consider it exited
+            if p.t_loadcell_enter is not None and p.t_loadcell_exit is None:
 
-              p.t_loadcell_exit = ts
-              p.state = "parked"
+                p.t_loadcell_exit = ts
+                p.state = "parked"
 
-              events.append(
-                  PipeExitedLoadcellEvent(
-                      pipe_uid=p.pipe_uid,
-                      tracker_id=tid,
-                      t_exit=ts
-                  )
-              )
+                events.append(
+                    PipeExitedLoadcellEvent(
+                        pipe_uid=p.pipe_uid,
+                        tracker_id=tid,
+                        t_exit=ts
+                    )
+                )
 
-              updated.append(p)
+                updated.append(p)
 
-              logger.info(
-                  "Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s",
-                  p.pipe_uid,
-                  tid,
-                  fmt_ts(ts)
-              )
+                logger.info(
+                    "Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s",
+                    p.pipe_uid,
+                    tid,
+                    fmt_ts(ts)
+                )
+            # store before deleting
+            if not hasattr(self, "recent_lost_pipes"):
+                self.recent_lost_pipes = []
 
-          del self.pipes[tid]
+            self.recent_lost_pipes.append(p)
+
+            del self.pipes[tid]
 
         return updated, events
