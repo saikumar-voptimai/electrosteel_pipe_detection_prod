@@ -68,6 +68,13 @@ class PipeFlowFSM:
 
         updated: List[PipeStats] = []
         events: List[object] = []
+        self.recent_lost_pipes = [
+            p for p in getattr(self, "recent_lost_pipes", [])
+            if (ts - p.last_seen_ts <= self.pipe_reconnect_window_sec)
+            # remove completed pipes
+            and not getattr(p, "is_finalized", False)
+        ]
+
 
         # Check loadcell empty for rearm
         any_pipe_in_loadcell = False
@@ -97,9 +104,18 @@ class PipeFlowFSM:
         # Process detections
         #  EARLY LOST PIPE DETECTION
         for tid, p in list(self.pipes.items()):
+            if getattr(p, "is_finalized", False):
+                continue  # skip completely
+            logger.debug(
+                "DEBUG LOST CHECK | uid=%s | finalized=%s | last_seen_gap=%d",
+                p.pipe_uid,
+                getattr(p, "is_finalized", False),
+                frame_idx - p.last_seen_frame
+            )
             if frame_idx - p.last_seen_frame > self.pipe_lost_frames:
-                if p not in self.recent_lost_pipes:
+                if p not in self.recent_lost_pipes and p.pipe_uid is not None:  # only consider pipes with assigned UID
                     logger.info("Pipe marked as lost | uid=%s", p.pipe_uid)
+
                     self.recent_lost_pipes.append(p)
 
         for d in dets:
@@ -119,7 +135,7 @@ class PipeFlowFSM:
                 for old in getattr(self, "recent_lost_pipes", []):
                     # logger.info(self.recent_lost_pipes)
                     if ts - old.last_seen_ts <= self.pipe_reconnect_window_sec:
-                        # TODO : add distance information 
+                        # TODO : add distance information
                         p = old
                         p.tracker_id = tid  # assign new track id
                         self.recent_lost_pipes.remove(old)
@@ -242,6 +258,12 @@ class PipeFlowFSM:
 
                         p.t_loadcell_exit = ts
                         p.state = "parked"
+                        p.is_finalized = True  # mark as finalized after exit
+                        logger.info(
+                                "DEBUG FINALIZED | uid=%s | finalized=%s",
+                                p.pipe_uid,
+                                getattr(p, "is_finalized", False)
+                            )
 
                         events.append(
                             PipeExitedLoadcellEvent(
@@ -303,7 +325,8 @@ class PipeFlowFSM:
             if not hasattr(self, "recent_lost_pipes"):
                 self.recent_lost_pipes = []
 
-            self.recent_lost_pipes.append(p)
+            if p.pipe_uid is not None:
+                self.recent_lost_pipes.append(p)
 
             del self.pipes[tid]
 
