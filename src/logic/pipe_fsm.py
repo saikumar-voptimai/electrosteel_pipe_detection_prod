@@ -48,6 +48,7 @@ class PipeFlowFSM:
         self.recent_lost_pipes = []
 
     # loadcell coverage area (e.g., 90%)
+
     def loadcell_covered_percentage(self, bbox):
         r = self.rois.rois[RoiName.LOADCELL.value]
         xs, ys = zip(*r)
@@ -68,56 +69,33 @@ class PipeFlowFSM:
 
         updated: List[PipeStats] = []
         events: List[object] = []
+
+        # keep only not finalized
         self.recent_lost_pipes = [
             p for p in getattr(self, "recent_lost_pipes", [])
-            if (ts - p.last_seen_ts <= self.pipe_reconnect_window_sec)
-            # remove completed pipes
-            and not getattr(p, "is_finalized", False)
+            if not getattr(p, "is_finalized", False)
         ]
 
-
-        # Check loadcell empty for rearm
-        any_pipe_in_loadcell = False
-        for d in dets:
-            if d.cls_name != "pipe" or d.track_id is None:
-                continue
-
-            cx, cy = d.bbox.centroid()
-
-            # skips pipe comes from left or righ origin
-            if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or \
-                    self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
-                continue
-
-            if self.loadcell_covered_percentage(d.bbox):
-                any_pipe_in_loadcell = True
-                break
-        if any_pipe_in_loadcell:
-            self.loadcell_empty_streak = 0
-        else:
-            self.loadcell_empty_streak += 1
-            if not self.loadcell_armed and \
-               self.loadcell_empty_streak >= self.rearm_empty_frames:
-                self.loadcell_armed = True
-                logger.info("Loadcell re-armed")
-
-        # Process detections
-        #  EARLY LOST PIPE DETECTION
+        # EARLY LOST PIPE DETECTION (only mark as lost, do not delete yet to allow for potential re-linking)
         for tid, p in list(self.pipes.items()):
             if getattr(p, "is_finalized", False):
-                continue  # skip completely
-            logger.debug(
-                "DEBUG LOST CHECK | uid=%s | finalized=%s | last_seen_gap=%d",
-                p.pipe_uid,
-                getattr(p, "is_finalized", False),
-                frame_idx - p.last_seen_frame
-            )
+                continue
+
+            # initialize flag if not present
+            if not hasattr(p, "is_marked_lost"):
+                p.is_marked_lost = False
+
             if frame_idx - p.last_seen_frame > self.pipe_lost_frames:
-                if p not in self.recent_lost_pipes and p.pipe_uid is not None:  # only consider pipes with assigned UID
+                if (
+                    not p.is_marked_lost
+                    and p.pipe_uid is not None
+                ):
                     logger.info("Pipe marked as lost | uid=%s", p.pipe_uid)
 
+                    p.is_marked_lost = True
                     self.recent_lost_pipes.append(p)
 
+        # PROCESS DETECTIONS
         for d in dets:
 
             if d.cls_name != "pipe" or d.track_id is None:
@@ -125,30 +103,47 @@ class PipeFlowFSM:
 
             tid = int(d.track_id)
             cx, cy = d.bbox.centroid()
-            if self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy) or self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy):
+
+            if self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy) or \
+                    self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy):
                 continue
 
             p = self.pipes.get(tid)
-            # logger.info(p)
-            #  MATCH WITH RECENT LOST PIPE UID
+
+            # RE-LINK LOGIC (RESET FLAG)
             if p is None:
                 for old in getattr(self, "recent_lost_pipes", []):
-                    # logger.info(self.recent_lost_pipes)
                     if ts - old.last_seen_ts <= self.pipe_reconnect_window_sec:
-                        # TODO : add distance information
+
                         p = old
-                        p.tracker_id = tid  # assign new track id
+                        p.tracker_id = tid
+
+                        #  RESET LOST FLAG
+                        p.is_marked_lost = False
+
                         self.recent_lost_pipes.remove(old)
+
                         logger.info("Re-linked lost pipe | uid=%s", p.pipe_uid)
                         break
+            # CREATE NEW PIPE
 
-            # Create temporary track (no UID yet)
             if p is None:
                 p = PipeStats(pipe_uid=None, tracker_id=tid)
                 p.last_seen_frame = frame_idx
                 p.last_seen_ts = ts
 
-            # Update tracking counters
+                # initialize flag
+                p.is_marked_lost = False
+
+                logger.info(
+                    "NEW TRACK CREATED | tid=%s | frame=%d | ts=%s | bbox=%s",
+                    tid,
+                    frame_idx,
+                    fmt_ts(ts),
+                    d.bbox
+                )
+
+            # UPDATE TRACKING INFO
             if p.frames_seen > 0:
                 gap = (frame_idx - p.last_seen_frame) - 1
                 if gap > 0:
@@ -260,10 +255,10 @@ class PipeFlowFSM:
                         p.state = "parked"
                         p.is_finalized = True  # mark as finalized after exit
                         logger.info(
-                                "DEBUG FINALIZED | uid=%s | finalized=%s",
-                                p.pipe_uid,
-                                getattr(p, "is_finalized", False)
-                            )
+                            "DEBUG FINALIZED | uid=%s | finalized=%s",
+                            p.pipe_uid,
+                            getattr(p, "is_finalized", False)
+                        )
 
                         events.append(
                             PipeExitedLoadcellEvent(
