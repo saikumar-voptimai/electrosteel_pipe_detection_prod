@@ -126,26 +126,24 @@ class PipeFlowFSM:
             p.last_seen_ts = ts
             p.tracker_id = tid
 
+            if self.rois.contains(RoiName.CASTER_ORIGIN.value, cx, cy):
+                p.last_seen_caster_ts = ts
+
             # ORIGIN CONFIRMATION
             if p.origin is None:
-
                 if self.rois.contains(RoiName.CASTER_ORIGIN.value, cx, cy):
-
                     p.origin_hits += 1
-                    p.last_seen_origin_ts = ts
-
                     if p.origin_hits >= self.origin_confirm_frames:
-
                         p.origin = "caster"
 
                         #  Merge logic based on t_origin gap
                         reuse_uid = None
-
                         if (
                             self.last_caster_pipe is not None
                             and self.last_caster_pipe.t_origin is not None
+                            and self.last_caster_pipe.last_seen_caster_ts is not None
                         ):
-                            gap_sec = ts - self.last_caster_pipe.last_seen_ts
+                            gap_sec = ts - self.last_caster_pipe.last_seen_caster_ts
 
                             if 0 <= gap_sec <= self.min_pipe_gap_seconds:
                                 reuse_uid = self.last_caster_pipe.pipe_uid
@@ -180,7 +178,6 @@ class PipeFlowFSM:
                         p.origin = "other"
 
             # LOADCELL ENTER
-
             eligible = (p.origin == "caster")
 
             if eligible and p.t_loadcell_enter is None:
@@ -241,6 +238,7 @@ class PipeFlowFSM:
                         )
                 else:
                     p.loadcell_exit_misses = 0
+                del self.pipes[tid]
 
             self.pipes[tid] = p
             if p.pipe_uid is not None:
