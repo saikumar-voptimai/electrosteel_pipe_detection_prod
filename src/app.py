@@ -110,9 +110,7 @@ class App:
       stale_track_frames=self.cfg.runtime.stale_track_frames,
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
       min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
-      loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
-      pipe_lost_frames=self.cfg.runtime.pipe_lost_frames,
-      pipe_reconnect_window_sec=self.cfg.runtime.pipe_reconnect_window_sec,
+      loadcell_covered_per=self.cfg.runtime.loadcell_covered_per
     )
 
     # Gate source switching via DB setting
@@ -130,10 +128,6 @@ class App:
     )
 
     limiter = RateLimiter(self.cfg.runtime.max_fps)
-
-    # Independent throttles for non-inference logic and visualization.
-    update_fps = int(getattr(self.cfg.runtime, "update_fps", 0) or 0)
-    last_update_ts = 0.0
     last_viz_ts = 0.0
 
     last_commit = time.time()

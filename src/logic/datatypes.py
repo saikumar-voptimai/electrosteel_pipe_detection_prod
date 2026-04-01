@@ -30,6 +30,7 @@ class PipeStats:
 
   last_seen_frame: int = 0
   last_seen_ts: float = 0.0
+  last_seen_caster_ts: float = 0.0
 
   counted: bool = False                      # Whether this pipe has been counted already
   origin_hits: int = 0                       # Number of origin zone hits (has to persist these many frames atleast)
