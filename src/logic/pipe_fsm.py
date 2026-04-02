@@ -57,7 +57,6 @@ class PipeFlowFSM:
         self.seq += 1
         return f"caster_{int(time.time())}_{self.seq:06d}"
 
-
     def update(self, frame_idx: int, ts: float, dets: List[TrackDet]):
         """
         Main FSM update method to be called every frame with current detections.
@@ -83,13 +82,13 @@ class PipeFlowFSM:
 
             # Skip if in origin ROIs to avoid false negatives when pipes are first detected in loadcell area but are actually still in origin area
             if self.rois.contains(RoiName.LEFT_ORIGIN.value, cx, cy) or \
-                self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
+                    self.rois.contains(RoiName.RIGHT_ORIGIN.value, cx, cy):
                 continue
 
             if self.loadcell_covered_percentage(d.bbox):
                 any_pipe_in_loadcell = True
                 break
-        
+
         if any_pipe_in_loadcell:
             self.loadcell_empty_streak = 0
         else:
@@ -236,13 +235,14 @@ class PipeFlowFSM:
                             "Pipe exited loadcell | uid=%s",
                             p.pipe_uid
                         )
+                        del self.pipes[tid]
+
                 else:
                     p.loadcell_exit_misses = 0
-                del self.pipes[tid]
 
             self.pipes[tid] = p
             if p.pipe_uid is not None:
-              updated.append(p)
+                updated.append(p)
 
         # ----------------------------------------------------
         # Cleanup stale tracks
@@ -253,37 +253,37 @@ class PipeFlowFSM:
         ]
 
         for tid in stale_ids:
-          p = self.pipes[tid]
+            p = self.pipes[tid]
 
-          logger.debug(
-              "Stale track cleanup | tid=%d | uid=%s | last_seen_frame=%d",
-              tid,
-              p.pipe_uid,
-              p.last_seen_frame
-          )
-          # If pipe entered loadcell but never exited, consider it exited
-          if p.t_loadcell_enter is not None and p.t_loadcell_exit is None:
+            logger.debug(
+                "Stale track cleanup | tid=%d | uid=%s | last_seen_frame=%d",
+                tid,
+                p.pipe_uid,
+                p.last_seen_frame
+            )
+            # If pipe entered loadcell but never exited, consider it exited
+            if p.t_loadcell_enter is not None and p.t_loadcell_exit is None:
 
-              p.t_loadcell_exit = ts
-              p.state = "parked"
+                p.t_loadcell_exit = ts
+                p.state = "parked"
 
-              events.append(
-                  PipeExitedLoadcellEvent(
-                      pipe_uid=p.pipe_uid,
-                      tracker_id=tid,
-                      t_exit=ts
-                  )
-              )
+                events.append(
+                    PipeExitedLoadcellEvent(
+                        pipe_uid=p.pipe_uid,
+                        tracker_id=tid,
+                        t_exit=ts
+                    )
+                )
 
-              updated.append(p)
+                updated.append(p)
 
-              logger.info(
-                  "Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s",
-                  p.pipe_uid,
-                  tid,
-                  fmt_ts(ts)
-              )
+                logger.info(
+                    "Pipe considered exited (stale) | uid=%s | tid=%d | ts=%s",
+                    p.pipe_uid,
+                    tid,
+                    fmt_ts(ts)
+                )
 
-          del self.pipes[tid]
+            del self.pipes[tid]
 
         return updated, events
