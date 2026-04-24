@@ -111,8 +111,6 @@ class App:
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
       min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
       loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
-      pipe_lost_frames=self.cfg.runtime.pipe_lost_frames,
-      pipe_reconnect_window_sec=self.cfg.runtime.pipe_reconnect_window_sec,
     )
 
     # Gate source switching via DB setting

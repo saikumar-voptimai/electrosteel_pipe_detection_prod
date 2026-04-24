@@ -1,6 +1,6 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: test9.mp4 # tests/videos/{video.mp4/.avi} | "gige"
-model_path: models/yolo/yolo11n_26_13_01.onnx
+video_source: test2.mp4 # tests/videos/{video.mp4/.avi} | "gige"
+model_path: models/yolo/yolo11n_26_16_01.pt
 tracker_yaml: "config/bytetrack.yaml"
 
 debug_mode: true
@@ -52,8 +52,6 @@ origin_confirm_frames: 5
 loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
 loadcell_exit_confirm_frames: 1
 stale_track_frames: 45
-pipe_lost_frames: 2                # frames before marking pipe as temporarily lost
-pipe_reconnect_window_sec: 3              # max time window to reconnect lost pipe
 rearm_empty_frames: 3
 min_pipe_gap_seconds: 5        # merge re-detected pipes from same origin within this window
 loadcell_covered_per: 50       # % of loadcell length covered to confirm pipe presence
