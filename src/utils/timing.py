@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 import logging
 from dataclasses import dataclass
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta, timezone as dt_timezone
 from typing import List, Dict
-import pytz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,14 @@ class TimeUtils:
     """
 
     def __init__(self, timezone: str = "Asia/Kolkata") -> None:
-        self.tz = pytz.timezone(timezone)
+        try:
+            self.tz = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            if timezone == "Asia/Kolkata":
+                self.tz = dt_timezone(timedelta(hours=5, minutes=30), timezone)
+            else:
+                logger.warning("Unknown timezone %s, falling back to UTC", timezone)
+                self.tz = dt_timezone.utc
 
     # ---------------- Public API ---------------- #
 

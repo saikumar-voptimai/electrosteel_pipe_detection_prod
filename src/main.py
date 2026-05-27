@@ -44,7 +44,7 @@ def main() -> None:
   if not cfg.runtime.run_headless:
     # Only set if we aren't in headless mode
     import os
-    os.environ["QT_QPA_PLATFORM"] = "wayland"
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
   App(cfg).run()
 
 if __name__ == "__main__":

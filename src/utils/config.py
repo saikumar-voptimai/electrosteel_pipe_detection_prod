@@ -67,6 +67,8 @@ class RuntimeCfg:
     imgsz: int
     conf: float
     iou: float
+    device: int | str | None
+    half: bool
     max_fps: int
     frame_skip: int
     # Throttle non-inference logic (FSM updates, DB upserts, event handling).
@@ -225,6 +227,14 @@ def load_config(
     else:
         raise ValueError("publish_imgsz must be int or [width, height]")
 
+    raw_device = r.get("device", "auto")
+    if raw_device is None:
+        device = None
+    elif isinstance(raw_device, int):
+        device = raw_device
+    else:
+        device = str(raw_device)
+
     runtime = RuntimeCfg(
         debug_mode=bool(r.get("debug_mode", False)),
         video_source=r.get("video_source", 0),
@@ -233,6 +243,8 @@ def load_config(
         imgsz=int(r.get("imgsz", 640)),
         conf=float(r.get("conf", 0.25)),
         iou=float(r.get("iou", 0.5)),
+        device=device,
+        half=bool(r.get("half", False)),
         max_fps=int(r.get("max_fps", 15)),
         frame_skip=int(r.get("frame_skip", 0)),
         update_fps=int(r.get("update_fps", 0)),
