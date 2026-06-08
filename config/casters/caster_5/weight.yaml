@@ -1,0 +1,31 @@
+# Optional S7 weight capture configuration
+enabled: false
+
+# Default machine to use when a pipe enters the loadcell.
+machine_id_default: 5
+
+# Siemens S7 connection
+rack: 0
+slot: 1
+db_number: 10
+
+# Trigger pulse
+pulse_ms: 300
+
+# Sampling
+read_duration_s: 30.0      # hard cap is also enforced in code
+read_interval_s: 0.2
+
+# Stability filter
+stable_window_s: 3.0
+min_nonzero: 0.1
+max_std_rel: 0.01
+max_std_abs: 2.0
+
+# Per-machine mapping
+machines:
+  5:
+    ip: "192.168.0.1"
+    trigger_byte: 1
+    trigger_bit: 2
+    weight_real_offset: 18

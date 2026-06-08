@@ -1,8 +1,9 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Tuple, List
 import yaml
 from pathlib import Path
+import re
 
 
 Point = Tuple[int, int]
@@ -21,14 +22,38 @@ class CameraReconnectCfg:
     max_retries: int = 5
     sleep_s: float = 1.0
 
+
+@dataclass(frozen=True)
+class BaslerCameraCfg:
+    device_user_id: str = ""
+    serial_number: str = ""
+    ip_address: str = ""
+    exposure_time: float | None = None
+    gain: float | None = None
+    grab_strategy: str = "latest_image_only"
+    timeout_ms: int = 1000
+    pixel_format: str | None = None
+    width: int | None = None
+    height: int | None = None
+    offset_x: int | None = None
+    offset_y: int | None = None
+    acquisition_frame_rate: float | None = None
+    packet_size: int | None = None
+    inter_packet_delay: int | None = None
+    max_num_buffer: int = 20
+
+
 @dataclass(frozen=True)
 class CameraCfg:
+    type: str
     id: int | str
     width: int
     height: int
     fps: int
     auto_exposure: bool
     auto_gain: bool
+    va_imaging: Dict[str, Any] | None = None
+    basler: BaslerCameraCfg | None = None
     profiles: Dict[str, CameraProfileCfg] | None = None
     reconnect: CameraReconnectCfg | None = None
 
@@ -110,6 +135,27 @@ class AppCfg:
     plc: PlcCfg
     camera_cfg: CameraCfg | None
     weight: "WeightCfg | None" = None
+    caster_id: int = 1
+    caster_key: str = "caster_1"
+    caster_config_path: str | None = None
+    caster_storage_path: str = "var/caster_1"
+    rois_path: str = "config/rois.yaml"
+    camera_cfg_path: str = "config/camera.yaml"
+
+
+@dataclass(frozen=True)
+class CasterFileCfg:
+    caster_id: int
+    caster_key: str
+    enabled: bool
+    runtime: str
+    rois: str
+    camera: str
+    plc: str
+    weight: str
+    bytetrack: str
+    storage_dir: str
+    overrides: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -139,9 +185,232 @@ class WeightCfg:
     machines: Dict[int, WeightMachineCfg]
 
 
-def _load_yaml(path: str) -> Dict[str, Any]:
+def _load_yaml(path: str | Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def resolve_caster_id(raw: int | str) -> int:
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        match = re.fullmatch(r"(?:caster[_-])?(\d+)", text)
+        if not match:
+            raise ValueError(f"Invalid caster id {raw!r}. Expected a positive integer or caster_<id>.")
+        caster_id = int(match.group(1))
+    else:
+        caster_id = int(raw)
+    return validate_caster_id(caster_id)
+
+
+def validate_caster_id(caster_id: int) -> int:
+    caster_id = int(caster_id)
+    if caster_id < 1:
+        raise ValueError(f"Invalid caster id {caster_id}. Expected a positive integer.")
+    return caster_id
+
+
+def caster_key(caster_id: int | str) -> str:
+    return f"caster_{resolve_caster_id(caster_id)}"
+
+
+def resolve_caster_config_dir(caster_id: int | str, base_dir: str | Path = "config/casters") -> Path:
+    return Path(base_dir) / caster_key(caster_id)
+
+
+def default_caster_config_path(caster_id: int | str) -> str:
+    return str(resolve_caster_config_dir(caster_id))
+
+
+def legacy_caster_config_path(caster_id: int | str) -> str:
+    caster_id = resolve_caster_id(caster_id)
+    return f"config/casters/caster_{caster_id}_config.yaml"
+
+
+def resolve_caster_storage_path(caster_id: int | str, var_dir: str | Path = "var") -> Path:
+    return Path(var_dir) / caster_key(caster_id)
+
+
+def resolve_caster_database_path(caster_id: int | str, var_dir: str | Path = "var") -> Path:
+    key = caster_key(caster_id)
+    return resolve_caster_storage_path(caster_id, var_dir) / f"{key}_pipes.db"
+
+
+def resolve_caster_latest_frame_path(caster_id: int | str, var_dir: str | Path = "var") -> Path:
+    return resolve_caster_storage_path(caster_id, var_dir) / "latest.jpg"
+
+
+def resolve_caster_log_path(caster_id: int | str, var_dir: str | Path = "var") -> Path:
+    return resolve_caster_storage_path(caster_id, var_dir) / "pipe_detect.log"
+
+
+def _first_existing(*paths: Path) -> Path:
+    for path in paths:
+        if path.exists():
+            return path
+    return paths[0]
+
+
+def _normalize_rois(rois_raw: Dict[str, Any]) -> Dict[str, Polygon]:
+    if "roi_caster_origin" not in rois_raw and "roi_caster5_origin" in rois_raw:
+        rois_raw = dict(rois_raw)
+        rois_raw["roi_caster_origin"] = rois_raw["roi_caster5_origin"]
+
+    rois: Dict[str, Polygon] = {}
+    for name, pts in (rois_raw or {}).items():
+        rois[name] = [(int(x), int(y)) for (x, y) in pts]
+    return rois
+
+
+def _ensure_parent_dir(path: str | None) -> None:
+    if not path:
+        return
+    parent = Path(path).expanduser().parent
+    if str(parent):
+        parent.mkdir(parents=True, exist_ok=True)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _parse_camera_cfg(c_raw: Dict[str, Any]) -> CameraCfg | None:
+    cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
+    if not isinstance(cam, dict) or not cam:
+        return None
+
+    camera_type = str(cam.get("type", "va_imaging")).strip().lower()
+    va_raw = dict(cam.get("va_imaging", {}) or {})
+    basler_raw = dict(cam.get("basler", {}) or {})
+    common_raw = dict(cam)
+    for key in ("type", "va_imaging", "basler"):
+        common_raw.pop(key, None)
+
+    # Backward compatibility: old camera.yaml placed VA Imaging settings directly under camera.
+    settings = {**common_raw, **va_raw} if camera_type == "va_imaging" else common_raw
+
+    profiles_raw = dict(settings.get("profiles", {}) or {})
+    profiles: Dict[str, CameraProfileCfg] | None = None
+    if profiles_raw:
+        profiles = {
+            str(name): CameraProfileCfg(
+                start=str(p["start"]),
+                end=str(p["end"]),
+                exposure_us=int(p["exposure_us"]),
+                gain_db=int(p["gain_db"]),
+                gamma_enable=bool(p.get("gamma_enable", True)),
+                gamma=float(p.get("gamma", 1.0)),
+            )
+            for name, p in profiles_raw.items()
+        }
+
+    reconnect_raw = settings.get("reconnect", cam.get("reconnect", {})) or {}
+    reconnect_cfg = CameraReconnectCfg(
+        max_retries=int(reconnect_raw.get("max_retries", 5)),
+        sleep_s=float(reconnect_raw.get("sleep_s", 1.0)),
+    )
+
+    basler_cfg = BaslerCameraCfg(
+        device_user_id=str(basler_raw.get("device_user_id", "") or ""),
+        serial_number=str(basler_raw.get("serial_number", "") or ""),
+        ip_address=str(basler_raw.get("ip_address", "") or ""),
+        exposure_time=_optional_float(basler_raw.get("exposure_time")),
+        gain=_optional_float(basler_raw.get("gain")),
+        grab_strategy=str(basler_raw.get("grab_strategy", "latest_image_only") or "latest_image_only"),
+        timeout_ms=int(basler_raw.get("timeout_ms", 1000)),
+        pixel_format=(str(basler_raw["pixel_format"]) if basler_raw.get("pixel_format") else None),
+        width=_optional_int(basler_raw.get("width")),
+        height=_optional_int(basler_raw.get("height")),
+        offset_x=_optional_int(basler_raw.get("offset_x")),
+        offset_y=_optional_int(basler_raw.get("offset_y")),
+        acquisition_frame_rate=_optional_float(basler_raw.get("acquisition_frame_rate")),
+        packet_size=_optional_int(basler_raw.get("packet_size")),
+        inter_packet_delay=_optional_int(basler_raw.get("inter_packet_delay")),
+        max_num_buffer=int(basler_raw.get("max_num_buffer", 20)),
+    )
+
+    return CameraCfg(
+        type=camera_type,
+        id=settings.get("id", 0),
+        width=int(settings.get("width", 960)),
+        height=int(settings.get("height", 640)),
+        fps=int(settings.get("fps", 8)),
+        auto_exposure=bool(settings.get("auto_exposure", False)),
+        auto_gain=bool(settings.get("auto_gain", False)),
+        va_imaging=va_raw,
+        basler=basler_cfg,
+        profiles=profiles,
+        reconnect=reconnect_cfg,
+    )
+
+
+def load_caster_file_config(caster_id: int | str, caster_config_path: str | None = None) -> CasterFileCfg:
+    caster_id = resolve_caster_id(caster_id)
+    key = caster_key(caster_id)
+    default_dir = resolve_caster_config_dir(caster_id)
+    legacy_path = Path(legacy_caster_config_path(caster_id))
+    path = Path(caster_config_path) if caster_config_path else (default_dir if default_dir.exists() else legacy_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing caster config {path}. Create it or run with --caster-config <path>."
+        )
+
+    if path.is_dir():
+        raw = _load_yaml(path / "config.yaml") if (path / "config.yaml").exists() else {}
+        runtime = path / "runtime.yaml"
+        rois = path / "rois.yaml"
+        camera = path / "camera.yaml"
+        plc = path / "plc.yaml"
+        weight = path / "weight.yaml"
+        bytetrack = path / "bytetrack.yaml"
+        defaults = {
+            "runtime": str(_first_existing(runtime, Path("config/runtime.yaml"))),
+            "rois": str(_first_existing(rois, Path(f"config/casters/{key}_rois.yaml"), Path("config/rois.yaml"))),
+            "camera": str(_first_existing(camera, Path(f"config/casters/{key}_camera.yaml"), Path("config/camera.yaml"))),
+            "plc": str(_first_existing(plc, Path("config/plc.yaml"))),
+            "weight": str(_first_existing(weight, Path("config/weight.yaml"))),
+            "bytetrack": str(_first_existing(bytetrack, Path("config/bytetrack.yaml"))),
+        }
+    else:
+        raw = _load_yaml(path)
+        defaults = {
+            "runtime": "config/runtime.yaml",
+            "rois": f"config/casters/{key}_rois.yaml",
+            "camera": f"config/casters/{key}_camera.yaml",
+            "plc": "config/plc.yaml",
+            "weight": "config/weight.yaml",
+            "bytetrack": "config/bytetrack.yaml",
+        }
+
+    file_caster_id = resolve_caster_id(raw.get("caster_id", caster_id))
+    if file_caster_id != caster_id:
+        raise ValueError(
+            f"Caster config {path} declares caster_id={file_caster_id}, "
+            f"but CLI requested caster_id={caster_id}."
+        )
+    if not bool(raw.get("enabled", True)):
+        raise ValueError(f"Caster {caster_id} is disabled in {path}.")
+
+    return CasterFileCfg(
+        caster_id=caster_id,
+        caster_key=key,
+        enabled=True,
+        runtime=str(raw.get("runtime", defaults["runtime"])),
+        rois=str(raw.get("rois", defaults["rois"])),
+        camera=str(raw.get("camera", defaults["camera"])),
+        plc=str(raw.get("plc", defaults["plc"])),
+        weight=str(raw.get("weight", defaults["weight"])),
+        bytetrack=str(raw.get("bytetrack", defaults["bytetrack"])),
+        storage_dir=str(raw.get("storage_dir", resolve_caster_storage_path(caster_id))),
+        overrides=dict(raw.get("overrides", {}) or {}),
+    )
 
 
 def load_config(
@@ -150,8 +419,11 @@ def load_config(
     plc_path: str,
     camera_cfg_path: str = "config/camera.yaml",
     weight_cfg_path: str = "config/weight.yaml",
+    runtime_overrides: Dict[str, Any] | None = None,
 ) -> AppCfg:
     r = _load_yaml(runtime_path)
+    if runtime_overrides:
+        r.update(runtime_overrides)
     rois_raw = _load_yaml(rois_path)
     p = _load_yaml(plc_path)
     c_raw = _load_yaml(camera_cfg_path)
@@ -161,40 +433,7 @@ def load_config(
     if weight_cfg_path and Path(weight_cfg_path).exists():
         weight_raw = _load_yaml(weight_cfg_path)
 
-    cam = (c_raw.get("camera") if isinstance(c_raw, dict) else None) or (c_raw or {})
-    camera_cfg: CameraCfg | None = None
-
-    if cam:
-        profiles_raw = dict(cam.get("profiles", {}) or {})
-        profiles: Dict[str, CameraProfileCfg] | None = None
-        if profiles_raw:
-            profiles = {
-                str(name): CameraProfileCfg(
-                    start=str(p["start"]),
-                    end=str(p["end"]),
-                    exposure_us=int(p["exposure_us"]),
-                    gain_db=int(p["gain_db"]),
-                    gamma_enable=bool(p.get("gamma_enable", True)),
-                    gamma=float(p.get("gamma", 1.0)),
-                )
-                for name, p in profiles_raw.items()
-            }
-            reconnect_raw = cam.get("reconnect", {}) or {}
-
-        reconnect_cfg = CameraReconnectCfg(
-            max_retries=int(reconnect_raw.get("max_retries", 5)),
-            sleep_s=float(reconnect_raw.get("sleep_s", 1.0)),
-        )
-        camera_cfg = CameraCfg(
-            id=cam.get("id", 0),
-            width=int(cam.get("width", 960)),
-            height=int(cam.get("height", 640)),
-            fps=int(cam.get("fps", 8)),
-            auto_exposure=bool(cam.get("auto_exposure", False)),
-            auto_gain=bool(cam.get("auto_gain", False)),
-            profiles=profiles,
-            reconnect=reconnect_cfg,
-        )
+    camera_cfg = _parse_camera_cfg(c_raw)
 
     gate_raw = r.get("gate", {}) or {}
     gate = GateRuntimeCfg(
@@ -277,9 +516,7 @@ def load_config(
         modbus=p.get("modbus"),
     )
 
-    rois: Dict[str, Polygon] = {}
-    for name, pts in (rois_raw or {}).items():
-        rois[name] = [(int(x), int(y)) for (x, y) in pts]
+    rois = _normalize_rois(rois_raw)
 
     weight_cfg: WeightCfg | None = None
     if weight_raw:
@@ -314,4 +551,54 @@ def load_config(
             machines=machines,
         )
 
-    return AppCfg(runtime=runtime, rois=rois, plc=plc, camera_cfg=camera_cfg, weight=weight_cfg)
+    return AppCfg(
+        runtime=runtime,
+        rois=rois,
+        plc=plc,
+        camera_cfg=camera_cfg,
+        weight=weight_cfg,
+        caster_id=1,
+        caster_key="caster_1",
+        caster_config_path=None,
+        caster_storage_path=str(resolve_caster_storage_path(1)),
+        rois_path=str(rois_path),
+        camera_cfg_path=str(camera_cfg_path),
+    )
+
+
+def load_caster_config(caster_id: int | str, caster_config_path: str | None = None) -> AppCfg:
+    caster_file = load_caster_file_config(caster_id, caster_config_path)
+    runtime_overrides = dict(caster_file.overrides)
+    runtime_overrides.setdefault("tracker_yaml", caster_file.bytetrack)
+
+    cfg = load_config(
+        runtime_path=caster_file.runtime,
+        rois_path=caster_file.rois,
+        plc_path=caster_file.plc,
+        camera_cfg_path=caster_file.camera,
+        weight_cfg_path=caster_file.weight,
+        runtime_overrides=runtime_overrides,
+    )
+
+    storage_dir = Path(caster_file.storage_dir)
+    runtime = replace(
+        cfg.runtime,
+        db_path=str(storage_dir / f"{caster_file.caster_key}_pipes.db"),
+        latest_jpg_path=str(storage_dir / "latest.jpg"),
+        log_path=(str(storage_dir / "pipe_detect.log") if cfg.runtime.log_path else None),
+        history=(replace(cfg.runtime.history, base_dir=str(storage_dir / "history")) if cfg.runtime.history else None),
+    )
+    _ensure_parent_dir(runtime.db_path)
+    _ensure_parent_dir(runtime.latest_jpg_path)
+    _ensure_parent_dir(runtime.log_path)
+
+    return replace(
+        cfg,
+        runtime=runtime,
+        caster_id=caster_file.caster_id,
+        caster_key=caster_file.caster_key,
+        caster_config_path=str(caster_config_path or default_caster_config_path(caster_file.caster_id)),
+        caster_storage_path=str(storage_dir),
+        rois_path=caster_file.rois,
+        camera_cfg_path=caster_file.camera,
+    )

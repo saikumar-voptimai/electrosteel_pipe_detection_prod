@@ -1,0 +1,11 @@
+camera:
+  type: va_imaging
+  id: 3
+  width: 2620
+  height: 1216
+  fps: 8
+  auto_exposure: false
+  auto_gain: false
+  reconnect:
+    max_retries: 3
+    sleep_s: 2.0

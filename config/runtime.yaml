@@ -1,5 +1,5 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: test1.mp4 # tests/videos/{video.mp4/.avi} | "gige"
+video_source: gige # tests/videos/{video.mp4/.avi} | "gige"
 model_path: models/yolo/yolo11n_26_16_01.engine
 tracker_yaml: "config/bytetrack.yaml"
 

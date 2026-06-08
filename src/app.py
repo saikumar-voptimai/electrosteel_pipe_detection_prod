@@ -5,20 +5,22 @@ from __future__ import annotations
 import os
 import time
 import logging
+import argparse
 import cv2
 import numpy as np
 from dataclasses import dataclass
+from pathlib import Path
 
 from plc.client import PLCClient
 from vision.types import BBox, TrackDet
-from utils.config import AppCfg
+from utils.config import AppCfg, load_caster_config, load_caster_file_config, resolve_caster_id
 from utils.timing import RateLimiter
 from utils.roi_names import REQUIRED_ROIS, as_keys
+from utils.roi_redraw import run_roi_redraw
 
 from camera.capture import Capture
 from geometry.roi import ROIManager
 
-from vision.tracker import YoloByteTrack
 from vision.overlay import LatestFramePublisher, draw_overlay
 
 from db.repo import SqliteRepo
@@ -47,7 +49,8 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | source=%s | model=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
+      "Starting app | caster=%s | source=%s | model=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
+      self.cfg.caster_id,
       self.cfg.runtime.video_source,
       self.cfg.runtime.model_path,
       self.cfg.runtime.device,
@@ -66,7 +69,7 @@ class App:
     for name in as_keys(REQUIRED_ROIS):
         if name not in self.cfg.rois:
             raise RuntimeError(
-                f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs."
+                f"Missing required ROI: {name} in {self.cfg.rois_path}. Run --redraw to define ROIs."
             )
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
@@ -92,6 +95,8 @@ class App:
         )
         scheduler.start()
 
+    from vision.tracker import YoloByteTrack
+
     tracker = YoloByteTrack(
         model_path=self.cfg.runtime.model_path,
         tracker_yaml=self.cfg.runtime.tracker_yaml,
@@ -103,10 +108,11 @@ class App:
     )
 
     # Pipe Flow FSM
+    pulse_tag = self._resolve_caster_pulse_tag()
     pipe_fsm = PipeFlowFSM(
       rois=rois,
       plc=plc,
-      pulse_tag=self.cfg.plc.tags["caster_5_new"],
+      pulse_tag=pulse_tag,
       pulse_ms=self.cfg.plc.pulse_ms,
       origin_confirm_frames=self.cfg.runtime.origin_confirm_frames,
       loadcell_enter_confirm_frames=self.cfg.runtime.loadcell_enter_confirm_frames,
@@ -463,3 +469,91 @@ class App:
       },
       plc_signal_on_open=False,
     )
+
+  def _resolve_caster_pulse_tag(self) -> str:
+    preferred = f"{self.cfg.caster_key}_new"
+    fallback = "caster_new"
+    tags = self.cfg.plc.tags
+
+    if preferred in tags:
+      tag = tags[preferred]
+      logger.info("Using caster pulse tag | caster=%s | key=%s | tag=%s", self.cfg.caster_id, preferred, tag)
+      self._validate_real_plc_tag(tag)
+      return tag
+    if fallback in tags:
+      tag = tags[fallback]
+      logger.warning("Missing %s; using fallback %s=%s", preferred, fallback, tag)
+      self._validate_real_plc_tag(tag)
+      return tag
+
+    message = (
+      f"Missing PLC pulse tag for caster {self.cfg.caster_id}. "
+      f"Expected '{preferred}' or fallback '{fallback}' in PLC tags."
+    )
+    if self.cfg.plc.mode.lower() == "mock":
+      logger.warning("%s Using synthetic mock tag %s.", message, preferred)
+      return preferred
+    raise RuntimeError(message)
+
+  def _validate_real_plc_tag(self, tag: str) -> None:
+    mode = self.cfg.plc.mode.lower()
+    if mode != "modbus":
+      return
+    coils = dict(((self.cfg.plc.modbus or {}).get("coils", {}) or {}))
+    if tag not in coils:
+      raise RuntimeError(
+        f"PLC tag '{tag}' is configured for caster {self.cfg.caster_id}, "
+        "but it is missing from plc.modbus.coils."
+      )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+  def caster_id_arg(raw: str) -> int:
+    try:
+      return resolve_caster_id(raw)
+    except ValueError as exc:
+      raise argparse.ArgumentTypeError(str(exc)) from exc
+
+  parser = argparse.ArgumentParser(description="Pipe detection app")
+  parser.add_argument("--caster", type=caster_id_arg, default=1, help="Caster id to run, e.g. 1 or caster_1.")
+  parser.add_argument("--caster-config", default=None, help="Path to caster config directory or legacy caster YAML.")
+  parser.add_argument("--redraw", action="store_true", help="Launch ROI redraw wizard for this caster.")
+  parser.add_argument("--video-source", default=None, help="Override video source for redraw/testing.")
+  return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+  args = parse_args(argv)
+
+  if args.redraw:
+    caster_file = load_caster_file_config(args.caster, args.caster_config)
+    video_source = args.video_source
+    if video_source is None:
+      import yaml
+      runtime_raw = {}
+      runtime_path = Path(caster_file.runtime)
+      if runtime_path.exists():
+        runtime_raw = yaml.safe_load(runtime_path.read_text(encoding="utf-8")) or {}
+      runtime_raw.update(caster_file.overrides)
+      video_source = runtime_raw.get("video_source", 0)
+
+    run_roi_redraw(
+      video_source=video_source,
+      rois_path=caster_file.rois,
+      camera_cfg_path=caster_file.camera,
+    )
+    print(f"[OK] Saved caster {caster_file.caster_id} ROIs to {caster_file.rois}")
+    return
+
+  caster_file = load_caster_file_config(args.caster, args.caster_config)
+  if not Path(caster_file.rois).exists():
+    raise SystemExit(f"Missing {caster_file.rois}. Run with --caster {caster_file.caster_id} --redraw to create ROIs.")
+  cfg = load_caster_config(args.caster, args.caster_config)
+
+  if not cfg.runtime.run_headless:
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+  App(cfg).run()
+
+
+if __name__ == "__main__":
+  main()

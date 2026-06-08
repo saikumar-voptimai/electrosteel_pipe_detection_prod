@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from ultralytics import YOLO
 
+from utils.device import RuntimeDevice, configure_torch_backend, select_runtime_device
 from vision.types import BBox, TrackDet
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,23 @@ class YoloByteTrack:
     logger.info("Loading YOLO model: %s", self.model_path)
     self._model_suffix = Path(str(self.model_path)).suffix.lower()
     self._is_tensorrt = self._model_suffix == ".engine"
-    self._torch_cuda_available = self._check_torch_cuda()
-    self._resolved_device = self._resolve_device()
+    self._runtime_device: RuntimeDevice = select_runtime_device(
+      requested=self.device,
+      model_path=self.model_path,
+      half=self.half,
+    )
+    self._resolved_device = self._runtime_device.ultralytics_device
+    configure_torch_backend(self._runtime_device)
 
     logger.info(
-      "YOLO runtime requested | device=%s | resolved_device=%s | half=%s | torch_cuda=%s | tensorrt_model=%s",
-      self.device,
+      "YOLO runtime resolved | requested=%s | ultralytics_device=%s | torch_device=%s | half=%s | torch=%s | torch_cuda=%s | cuda_name=%s | tensorrt_model=%s",
+      self._runtime_device.requested,
       self._resolved_device,
-      self.half,
-      self._torch_cuda_available,
+      self._runtime_device.torch_device,
+      self._runtime_device.half,
+      self._runtime_device.torch_version,
+      self._runtime_device.torch_cuda_available,
+      self._runtime_device.cuda_device_name,
       self._is_tensorrt,
     )
     if self._is_tensorrt and importlib.util.find_spec("tensorrt") is None:
@@ -51,34 +60,19 @@ class YoloByteTrack:
         "YOLO is configured for CPU inference. On Jetson Orin Nano this is usually the reason FPS stays near 2-3. "
         "Install Jetson CUDA PyTorch or use a TensorRT .engine model."
       )
+    if self._runtime_device.is_onnx:
+      logger.warning(
+        "ONNX model configured. GPU execution depends on a CUDA/TensorRT-capable ONNX Runtime provider; "
+        "for Jetson production, prefer exporting this model to TensorRT .engine."
+      )
 
     self.model = YOLO(self.model_path)
+    if self._model_suffix == ".pt" and self._runtime_device.is_cuda:
+      self.model.to(self._runtime_device.torch_device)
     try:
       logger.info("YOLO model loaded | names=%d", len(getattr(self.model, "names", {}) or {}))
     except Exception:
       logger.debug("YOLO model loaded (names unavailable)")
-
-  def _check_torch_cuda(self) -> bool:
-    try:
-      import torch
-      return bool(torch.cuda.is_available())
-    except Exception:
-      return False
-
-  def _resolve_device(self) -> int | str | None:
-    requested = self.device
-    if requested is None:
-      return None
-    if isinstance(requested, str):
-      normalized = requested.strip().lower()
-      if normalized in ("", "none", "default"):
-        return None
-      if normalized == "auto":
-        if self._is_tensorrt:
-          return 0
-        return 0 if self._torch_cuda_available else "cpu"
-      return requested
-    return requested
 
   @staticmethod
   def _device_is_cpu(device: int | str | None) -> bool:
@@ -103,10 +97,19 @@ class YoloByteTrack:
     }
     if self._resolved_device is not None:
       track_kwargs["device"] = self._resolved_device
-    if self.half and not self._is_tensorrt and not self._device_is_cpu(self._resolved_device):
+    if self._runtime_device.half:
       track_kwargs["half"] = True
 
-    results = self.model.track(**track_kwargs)
+    try:
+      import torch
+    except Exception:
+      torch = None
+
+    if torch is not None:
+      with torch.inference_mode():
+        results = self.model.track(**track_kwargs)
+    else:
+      results = self.model.track(**track_kwargs)
     dt_ms = (time.perf_counter() - t0) * 1000.0
     if not results:
       logger.debug("YOLO.track returned no results | dt_ms=%.1f", dt_ms)
