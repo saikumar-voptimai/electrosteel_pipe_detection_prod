@@ -39,6 +39,12 @@ from utils.camera_scheduler import CameraProfileScheduler
 logger = logging.getLogger("pipe_detect")
 
 
+def _as_bgr(frame: np.ndarray) -> np.ndarray:
+  if frame.ndim == 2:
+    return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+  return frame
+
+
 
 @dataclass
 class App:
@@ -49,9 +55,10 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | caster=%s | source=%s | model=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
+      "Starting app | caster=%s | source=%s | processing_image_type=%s | model=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
       self.cfg.caster_id,
       self.cfg.runtime.video_source,
+      self.cfg.runtime.processing_image_type,
       self.cfg.runtime.model_path,
       self.cfg.runtime.device,
       self.cfg.runtime.half,
@@ -83,7 +90,11 @@ class App:
       logger.info("Weight capture enabled | machine_default=%s", self.cfg.weight.machine_id_default)
 
     rois = ROIManager(self.cfg.rois)
-    capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
+    capture = Capture(
+      source=self.cfg.runtime.video_source,
+      camera_cfg=self.cfg.camera_cfg,
+      processing_image_type=self.cfg.runtime.processing_image_type,
+    )
     capture.open()
     # Start camera profile scheduler. 
     scheduler = None
@@ -193,7 +204,7 @@ class App:
           frame_idx += 1
           continue
 
-        dets = tracker.infer(frame_scaled) # Inference running on scaled frame (w960, h445)
+        dets = tracker.infer(_as_bgr(frame_scaled)) # Inference running on scaled frame (w960, h445)
         st3 = time.time()
         # It doesnt matter to yolo what the other dimension. Since it can detect the presence of objects
         # and reports in absolutre pixel coordinates of the scaled frame.
@@ -315,6 +326,7 @@ class App:
           elif isinstance(pub_size, tuple) and len(pub_size) == 2:
               target_w, target_h = pub_size
               vis_base = cv2.resize(frame_orig, (target_w, target_h))
+          vis_base = _as_bgr(vis_base)
           vis_h, vis_w = vis_base.shape[:2]
           vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
           vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730

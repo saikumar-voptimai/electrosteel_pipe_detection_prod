@@ -87,6 +87,7 @@ class HistoryCfg:
 class RuntimeCfg:
     debug_mode: bool
     video_source: int | str
+    processing_image_type: str
     model_path: str
     tracker_yaml: str
     imgsz: int
@@ -279,6 +280,29 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def normalize_processing_image_type(value: Any) -> str:
+    text = str(value or "RGB").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "rgb": "RGB",
+        "color": "RGB",
+        "colour": "RGB",
+        "bgr": "RGB",
+        "b/w": "B/W",
+        "bw": "B/W",
+        "black_white": "B/W",
+        "black_and_white": "B/W",
+        "gray": "B/W",
+        "grey": "B/W",
+        "grayscale": "B/W",
+        "greyscale": "B/W",
+        "mono": "B/W",
+        "mono8": "B/W",
+    }
+    if text not in aliases:
+        raise ValueError("processing_image_type must be RGB or B/W")
+    return aliases[text]
 
 
 def _parse_camera_cfg(c_raw: Dict[str, Any]) -> CameraCfg | None:
@@ -477,6 +501,7 @@ def load_config(
     runtime = RuntimeCfg(
         debug_mode=bool(r.get("debug_mode", False)),
         video_source=r.get("video_source", 0),
+        processing_image_type=normalize_processing_image_type(r.get("processing_image_type", "RGB")),
         model_path=r["model_path"],
         tracker_yaml=r["tracker_yaml"],
         imgsz=int(r.get("imgsz", 640)),

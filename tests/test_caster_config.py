@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from utils.config import (
   load_caster_config,
+  normalize_processing_image_type,
   resolve_caster_database_path,
   resolve_caster_id,
   resolve_caster_storage_path,
@@ -120,6 +121,7 @@ class CasterConfigTests(unittest.TestCase):
       self.assertTrue(cfg.rois_path.endswith("caster_2/rois.yaml"))
       self.assertTrue(cfg.camera_cfg_path.endswith("caster_2/camera.yaml"))
       self.assertEqual(cfg.runtime.video_source, 1)
+      self.assertEqual(cfg.runtime.processing_image_type, "RGB")
       self.assertTrue(cfg.runtime.tracker_yaml.endswith("caster_2/bytetrack.yaml"))
       self.assertTrue(cfg.runtime.db_path.endswith("var/caster_2/caster_2_pipes.db"))
       self.assertTrue(cfg.runtime.latest_jpg_path.endswith("var/caster_2/latest.jpg"))
@@ -132,6 +134,26 @@ class CasterConfigTests(unittest.TestCase):
 
       self.assertIn("roi_caster_origin", cfg.rois)
       self.assertEqual(cfg.rois["roi_caster_origin"], cfg.rois["roi_caster5_origin"])
+
+  def test_processing_image_type_aliases_are_normalized(self) -> None:
+    self.assertEqual(normalize_processing_image_type("RGB"), "RGB")
+    self.assertEqual(normalize_processing_image_type("B/W"), "B/W")
+    self.assertEqual(normalize_processing_image_type("grayscale"), "B/W")
+    self.assertEqual(normalize_processing_image_type("black white"), "B/W")
+    with self.assertRaisesRegex(ValueError, "processing_image_type"):
+      normalize_processing_image_type("infrared")
+
+  def test_processing_image_type_loads_from_runtime(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      caster_config = _caster_fixture(Path(tmp), caster_id=1)
+      runtime_path = caster_config / "runtime.yaml"
+      runtime_payload = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+      runtime_payload["processing_image_type"] = "B/W"
+      _write_yaml(runtime_path, runtime_payload)
+
+      cfg = load_caster_config(1, str(caster_config))
+
+      self.assertEqual(cfg.runtime.processing_image_type, "B/W")
 
   def test_dynamic_storage_and_database_paths(self) -> None:
     self.assertEqual(str(resolve_caster_storage_path("caster_12")), "var/caster_12")

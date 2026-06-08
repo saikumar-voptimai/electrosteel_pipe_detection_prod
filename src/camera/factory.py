@@ -22,18 +22,32 @@ def resolve_camera_type(camera_cfg: CameraCfg | None, source: int | str | None =
     return "opencv"
 
 
-def create_camera_client(source: int | str, camera_cfg: CameraCfg | None = None, **kwargs: Any) -> CameraClient:
+def create_camera_client(
+    source: int | str,
+    camera_cfg: CameraCfg | None = None,
+    processing_image_type: str = "RGB",
+    **kwargs: Any,
+) -> CameraClient:
     camera_type = resolve_camera_type(camera_cfg, source)
     if camera_type == "opencv":
-        return OpenCVCameraClient(source=source)
+        return OpenCVCameraClient(source=source, processing_image_type=processing_image_type)
     if camera_type == "va_imaging":
         if camera_cfg is None:
             raise ValueError("VA Imaging camera selected but camera config is missing")
-        return VAImagingCameraClient(source=source, camera_cfg=camera_cfg, **kwargs)
+        return VAImagingCameraClient(
+            source=source,
+            camera_cfg=camera_cfg,
+            processing_image_type=processing_image_type,
+            **kwargs,
+        )
     if camera_type == "basler":
         if camera_cfg is None:
             raise ValueError("Basler camera selected but camera config is missing")
-        return BaslerCameraClient(source=source, camera_cfg=camera_cfg)
+        return BaslerCameraClient(
+            source=source,
+            camera_cfg=camera_cfg,
+            processing_image_type=processing_image_type,
+        )
     raise ValueError(
         f"Unsupported camera type {camera_type!r}. "
         "Expected one of: va_imaging, basler, opencv."

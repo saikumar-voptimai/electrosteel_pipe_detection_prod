@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class Capture:
     source: int | str
     camera_cfg: CameraCfg | None = None
+    processing_image_type: str = "RGB"
     warmup_frames: int = 10
     max_retries: int = 5
     reconnect_sleep_s: float = 1.0
@@ -29,6 +30,7 @@ class Capture:
         self._client = create_camera_client(
             source=self.source,
             camera_cfg=self.camera_cfg,
+            processing_image_type=self.processing_image_type,
             warmup_frames=self.warmup_frames,
         )
         self._client.open()

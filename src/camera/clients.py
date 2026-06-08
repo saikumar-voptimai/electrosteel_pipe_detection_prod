@@ -35,6 +35,7 @@ class CameraClient(Protocol):
 @dataclass
 class OpenCVCameraClient:
     source: int | str
+    processing_image_type: str = "RGB"
     _cap: object | None = field(default=None, init=False)
 
     def open(self) -> None:
@@ -50,12 +51,18 @@ class OpenCVCameraClient:
             self.open()
         ok, frame = self._cap.read()
         if ok and frame is not None:
+            if self.processing_image_type == "B/W":
+                import cv2
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             return frame, time.time()
 
         logger.info("Video source ended; restarting: %s", self.source)
         self._cap.set(0, 0)
         ok, frame = self._cap.read()
         if ok and frame is not None:
+            if self.processing_image_type == "B/W":
+                import cv2
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             return frame, time.time()
         return None
 
@@ -75,6 +82,7 @@ class OpenCVCameraClient:
 class VAImagingCameraClient:
     source: int | str
     camera_cfg: CameraCfg
+    processing_image_type: str = "RGB"
     warmup_frames: int = 10
     _device_manager: object | None = field(default=None, init=False)
     _cam: object | None = field(default=None, init=False)
@@ -123,14 +131,22 @@ class VAImagingCameraClient:
         if self._gx is None:
             return
         status = int(device_info.get("access_status", 0) or 0)
-        if status == int(self._gx.GxAccessStatus.READWRITE):
-            return
         status_name = {
             int(self._gx.GxAccessStatus.UNKNOWN): "UNKNOWN",
             int(self._gx.GxAccessStatus.READWRITE): "READWRITE",
             int(self._gx.GxAccessStatus.READONLY): "READONLY",
             int(self._gx.GxAccessStatus.NOACCESS): "NOACCESS",
         }.get(status, str(status))
+        if status == int(self._gx.GxAccessStatus.READWRITE):
+            return
+        if status == int(self._gx.GxAccessStatus.UNKNOWN):
+            logger.warning(
+                "VA Imaging camera access status is UNKNOWN; trying to open by serial anyway | sn=%s | ip=%s | display_name=%s",
+                device_info.get("sn"),
+                device_info.get("ip"),
+                device_info.get("display_name"),
+            )
+            return
         raise RuntimeError(
             "VA Imaging camera is not available for control access. "
             f"status={status_name}, sn={device_info.get('sn')}, ip={device_info.get('ip')}, "
@@ -189,10 +205,18 @@ class VAImagingCameraClient:
         raw = self._cam.data_stream[0].get_image()
         if raw is None:
             return None
-        rgb = raw.convert("RGB")
-        img = rgb.get_numpy_array()
+        converted = raw.convert("RGB")
+        if converted is None:
+            logger.warning("VA Imaging RGB conversion returned no image")
+            return None
+        img = converted.get_numpy_array()
         if img is None:
             return None
+        if self.processing_image_type == "B/W":
+            import cv2
+
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            return np.ascontiguousarray(gray), time.time()
         return np.ascontiguousarray(img[:, :, ::-1]), time.time()
 
     def close(self) -> None:
@@ -215,6 +239,7 @@ class VAImagingCameraClient:
 class BaslerCameraClient:
     source: int | str
     camera_cfg: CameraCfg
+    processing_image_type: str = "RGB"
     _camera: object | None = field(default=None, init=False)
     _converter: object | None = field(default=None, init=False)
     _pylon: object | None = field(default=None, init=False)
@@ -243,7 +268,9 @@ class BaslerCameraClient:
         self._apply_grab_buffer_settings()
         self._apply_settings()
         self._converter = pylon.ImageFormatConverter()
-        self._converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self._converter.OutputPixelFormat = (
+            pylon.PixelType_Mono8 if self.processing_image_type == "B/W" else pylon.PixelType_BGR8packed
+        )
         self._converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
         self._camera.StartGrabbing(self._grab_strategy())
         logger.info("Basler camera opened | metadata=%s", self.get_metadata())
