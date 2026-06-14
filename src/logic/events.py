@@ -17,8 +17,3 @@ class PipeExitedLoadcellEvent:
 class GateOpenedEvent:
   gate_name: str  # "gate1" | "gate2"
   t_open: float  # Epoch seconds
-
-@dataclass(frozen=True)
-class GateClosedEvent:
-    gate_name: str
-    t_closed: float

@@ -27,7 +27,7 @@ from plc.factory import create_plc
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
-from logic.events import GateClosedEvent, GateOpenedEvent
+from logic.events import GateOpenedEvent, PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent
 from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import resize_for_inference
@@ -136,6 +136,7 @@ class App:
 
     last_commit = time.time()
     last_setting_poll = time.time() 
+    loadcell_unknown_tids: set[int] = set()
 
     frame_idx = 0
 
@@ -215,18 +216,28 @@ class App:
             if isinstance(event, GateOpenedEvent):
                 repo.gate_open(event.gate_name, event.t_open)
 
-            elif isinstance(event, GateClosedEvent):
-                repo.gate_close(event.gate_name, event.t_closed)
-
 
         # Update pipe FSM (full logic)
         updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
         logger.debug("Pipe FSM updated | idx=%d | updated=%d | events=%d", frame_idx, len(updated_pipes), len(pipe_events))
 
+        current_loadcell_tids = {
+          int(d.track_id) for d in dets_orig
+          if d.cls_name == "pipe" and d.track_id is not None and pipe_fsm.loadcell_covered_percentage(d.bbox)
+        }
+        for tid in current_loadcell_tids - loadcell_unknown_tids:
+          p = pipe_fsm.pipes.get(tid)
+          if p is None or p.pipe_uid is None:
+            repo.loadcell_enter(tid, ts)
+            loadcell_unknown_tids.add(tid)
+        for tid in loadcell_unknown_tids - current_loadcell_tids:
+          repo.loadcell_exit(tid, ts)
+          loadcell_unknown_tids.remove(tid)
+
         # Handle pipe events + optional extra PLC tag for debugging
         for event in pipe_events:
           logger.info(f"Pipe event: {event}")
-          if event.__class__.__name__ == "PipeEnteredLoadcellEvent":
+          if isinstance(event, PipeEnteredLoadcellEvent):
             repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
             if "pipe_on_loadcell" in self.cfg.plc.tags:
               plc.pulse(self.cfg.plc.tags["pipe_on_loadcell"], self.cfg.plc.pulse_ms)
@@ -236,7 +247,7 @@ class App:
               if ok:
                 repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
 
-          if event.__class__.__name__ == "PipeExitedLoadcellEvent":
+          if isinstance(event, PipeExitedLoadcellEvent):
             repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
 
             if weight_service is not None:
