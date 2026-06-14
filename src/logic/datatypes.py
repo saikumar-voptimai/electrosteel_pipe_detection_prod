@@ -16,6 +16,7 @@ class PipeStats:
   t_origin: Optional[float] = None           # Epoch seconds when first seen in origin ROI
   t_loadcell_enter: Optional[float] = None   # Epoch seconds when placed on loadcell
   t_loadcell_exit: Optional[float] = None    # Epoch seconds when removed from loadcell
+  pipe_checkpoint: bool = False              # True once pipe reaches checkpoint ROI
 
   frames_seen: int = 0                       # To check persistence
   frames_missing: int = 0                    # To check staleness
@@ -30,6 +31,7 @@ class PipeStats:
 
   last_seen_frame: int = 0
   last_seen_ts: float = 0.0
+  last_seen_caster_ts: Optional[float] = None
 
   counted: bool = False                      # Whether this pipe has been counted already
   origin_hits: int = 0                       # Number of origin zone hits (has to persist these many frames atleast)

@@ -111,6 +111,7 @@ class App:
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
       min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
       loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
+      remove_pipe_id_pipe_checkpoint_not_entered=self.cfg.runtime.remove_pipe_id_pipe_checkpoint_not_entered,
     )
 
     # Gate source switching via DB setting
@@ -241,6 +242,9 @@ class App:
 
             if weight_service is not None:
               weight_service.stop()
+          if event.__class__.__name__ == "PipeRemovedBeforeCheckpointEvent":
+            repo.delete_pipe(event.pipe_uid)
+            repo.insert_event("pipe_deleted", event.pipe_uid, event.reason)
         freq = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
         logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
 
@@ -270,6 +274,7 @@ class App:
             "pipe_uid": p.pipe_uid,
             "tracker_id": p.tracker_id,
             "origin": p.origin,
+            "pipe_checkpoint": 1 if p.pipe_checkpoint else 0,
             "state": p.state,
             "t_origin": p.t_origin,
             "t_loadcell_enter": p.t_loadcell_enter,

@@ -87,6 +87,7 @@ class RuntimeCfg:
     rearm_empty_frames: int
     min_pipe_gap_seconds: int
     loadcell_covered_per: int
+    remove_pipe_id_pipe_checkpoint_not_entered: bool
     history: HistoryCfg | None
     class_name_to_id: Dict[str, int]
     publish_overlay: bool
@@ -254,6 +255,7 @@ def load_config(
         min_pipe_gap_seconds=int(r.get("min_pipe_gap_seconds", 60)),
 
         loadcell_covered_per=int(r.get("loadcell_covered_per", 90)),
+        remove_pipe_id_pipe_checkpoint_not_entered=bool(r.get("remove_pipe_id_pipe_checkpoint_not_entered", False)),
         gate=gate,
         history=history, 
     )

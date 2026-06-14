@@ -78,6 +78,7 @@ def draw_overlay(
     for roi in (
         RoiName.LOADCELL,
         RoiName.CASTER_ORIGIN,
+        RoiName.PIPE_CHECKPOINT,
         RoiName.GATE1_OPEN,
         RoiName.GATE2_OPEN,
         RoiName.RIGHT_ORIGIN,

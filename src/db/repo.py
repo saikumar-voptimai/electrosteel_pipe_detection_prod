@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS pipes (
   pipe_uid TEXT PRIMARY KEY,
   tracker_id INTEGER,
   origin TEXT,
+  pipe_checkpoint INTEGER DEFAULT 0,
   state TEXT,
   t_origin REAL,
   t_loadcell_enter REAL,
@@ -74,6 +75,7 @@ class SqliteRepo:
         "weight": "REAL",
         "weight_quality": "TEXT",
         "weight_samples": "INTEGER",
+        "pipe_checkpoint": "INTEGER DEFAULT 0",
       },
     )
     self.conn.commit()
@@ -106,6 +108,10 @@ class SqliteRepo:
     """
     self.conn.execute(sql, tuple(row.values()))
     logger.debug("Upsert pipe | uid=%s | origin=%s | state=%s", row.get("pipe_uid"), row.get("origin"), row.get("state"))
+
+  def delete_pipe(self, pipe_uid: str) -> None:
+    self.conn.execute("DELETE FROM pipes WHERE pipe_uid=?", (pipe_uid,))
+    logger.info("Deleted pipe | uid=%s", pipe_uid)
   
   def insert_event(self, event_type: str, pipe_uid: str | None, details: str = "") -> None:
     """
@@ -128,7 +134,7 @@ class SqliteRepo:
     """
     cursor = self.conn.execute(
       """
-      SELECT pipe_uid, origin, t_origin, t_loadcell_enter, t_loadcell_exit, 
+      SELECT pipe_uid, origin, pipe_checkpoint, t_origin, t_loadcell_enter, t_loadcell_exit,
               weight, weight_quality, weight_samples,
              avg_conf_full, avg_conf_till_gate, frames_missing, state, last_seen_ts
       FROM pipes

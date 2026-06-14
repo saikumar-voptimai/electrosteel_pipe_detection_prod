@@ -7,7 +7,7 @@ import logging
 from utils.roi_names import RoiName
 from geometry.roi import ROIManager
 from logic.datatypes import PipeStats
-from logic.events import PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent
+from logic.events import PipeEnteredLoadcellEvent, PipeExitedLoadcellEvent, PipeRemovedBeforeCheckpointEvent
 from plc.client import PLCClient
 from vision.types import TrackDet
 from ui.formatting import fmt_ts
@@ -30,6 +30,7 @@ class PipeFlowFSM:
     rearm_empty_frames: int = 10
     min_pipe_gap_seconds: int = 15
     loadcell_covered_per: int = 90
+    remove_pipe_id_pipe_checkpoint_not_entered: bool = False
 
     pipes: Dict[int, PipeStats] = None
     seq: int = 0
@@ -56,6 +57,16 @@ class PipeFlowFSM:
     def _new_pipe_uid(self) -> str:
         self.seq += 1
         return f"caster_{int(time.time())}_{self.seq:06d}"
+
+    def _pipe_uid_to_remove_before_new_uid(self) -> str | None:
+        p = self.last_caster_pipe
+        if not (self.remove_pipe_id_pipe_checkpoint_not_entered and p and p.pipe_uid):
+            return None
+        uid = p.pipe_uid
+        active = [x for x in self.pipes.values() if x.pipe_uid == uid]
+        has_loadcell = p.t_loadcell_enter is not None or any(x.t_loadcell_enter is not None for x in active)
+        has_checkpoint = p.pipe_checkpoint or any(x.pipe_checkpoint for x in active)
+        return uid if not has_loadcell and not has_checkpoint else None
 
     def update(self, frame_idx: int, ts: float, dets: List[TrackDet]):
         """
@@ -156,7 +167,13 @@ class PipeFlowFSM:
                             # reuse previous pipe fully
                             p.pipe_uid = self.last_caster_pipe.pipe_uid
                             p.t_origin = self.last_caster_pipe.t_origin   # keep old time
+                            p.pipe_checkpoint = self.last_caster_pipe.pipe_checkpoint
                         else:
+                            old_uid = self._pipe_uid_to_remove_before_new_uid()
+                            if old_uid:
+                                self.pipes = {k: v for k, v in self.pipes.items() if v.pipe_uid != old_uid}
+                                updated = [u for u in updated if u.pipe_uid != old_uid]
+                                events.append(PipeRemovedBeforeCheckpointEvent(old_uid, "pipe_checkpoint_not_entered"))
                             p.pipe_uid = self._new_pipe_uid()
                             p.t_origin = ts   # only set new time for truly new pipe
 
@@ -178,6 +195,10 @@ class PipeFlowFSM:
 
             # LOADCELL ENTER
             eligible = (p.origin == "caster")
+
+            if eligible and not p.pipe_checkpoint and self.rois.contains(RoiName.PIPE_CHECKPOINT.value, cx, cy):
+                p.pipe_checkpoint = True
+                logger.info("Pipe entered pipe checkpoint | uid=%s", p.pipe_uid)
 
             if eligible and p.t_loadcell_enter is None:
 

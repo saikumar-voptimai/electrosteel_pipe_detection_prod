@@ -307,6 +307,7 @@ def default_roi_specs() -> List[ROISpec]:
   return [
     ROISpec(RoiName.LOADCELL.value, (0,255, 255), "Loadcell zone: trigger PLC when ELIGIBLE pipe enters this ROI."),
     ROISpec(RoiName.CASTER_ORIGIN.value, (255, 255, 0), "Caster origin zone: includes, caster, trolley-end-area upto gate1."),
+    ROISpec(RoiName.PIPE_CHECKPOINT.value, (0, 200, 255), "Pipe checkpoint: pipe must enter here after caster origin to confirm movement."),
     ROISpec(RoiName.LEFT_ORIGIN.value,     (0, 165, 255), "Left origin/exclusion: pipes here are ignored. If originating here origin='other'."),
     ROISpec(RoiName.RIGHT_ORIGIN.value,    (255, 0, 255), "Right origin/exclusion: pipes here are ignored. If originating here origin='other'."),
     ROISpec(RoiName.GATE1_CLOSED.value,    (255, 0, 0),   "Gate1 closed reference ROI (4-pt box). Used as baseline for geometry checks."),

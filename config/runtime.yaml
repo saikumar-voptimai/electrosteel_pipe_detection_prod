@@ -1,6 +1,6 @@
 # fps, conf thresholds, debounce frames, logging
 video_source: test2.mp4 # tests/videos/{video.mp4/.avi} | "gige"
-model_path: models/yolo/yolo11n_26_16_01.pt
+model_path: models/yolo/yolo11n_26_23_01.pt
 tracker_yaml: "config/bytetrack.yaml"
 
 debug_mode: true
@@ -49,6 +49,7 @@ db_flush_interval_s: 5.0            # batch DB commits for Pi
 run_headless: false                 # disable display window
 
 origin_confirm_frames: 5
+remove_pipe_id_pipe_checkpoint_not_entered: false   # true = before new UID, delete previous UID only if no loadcell entry and no pipe checkpoint
 loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
 loadcell_exit_confirm_frames: 1
 stale_track_frames: 45
