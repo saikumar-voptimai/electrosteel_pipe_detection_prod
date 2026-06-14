@@ -46,12 +46,17 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS gate_cycles (
+CREATE TABLE IF NOT EXISTS gate_open_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  t_gate1_open REAL,
-  t_gate1_close REAL,
-  t_gate2_open REAL,
-  t_gate2_close REAL,
+  gate_name TEXT NOT NULL,
+  t_open REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS loadcell_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tracker_id INTEGER NOT NULL,
+  t_enter REAL,
+  t_exit REAL,
   created_at REAL DEFAULT (strftime('%s','now'))
 );
 
@@ -196,43 +201,43 @@ class SqliteRepo:
     return row[0] if row else default
   
   def gate_open(self, gate, ts):
+    gate_name = {"gate1": "g1", "gate2": "g2"}.get(gate, gate)
+    self.conn.execute(
+      "INSERT INTO gate_open_events(gate_name,t_open) VALUES(?,?)",
+      (gate_name, ts),
+    )
+    logger.info("Gate open written to DB | gate=%s | ts=%.3f", gate_name, ts)
 
-    col = "t_gate1_open" if gate == "gate1" else "t_gate2_open"
+  def loadcell_enter(self, tracker_id: int, ts: float) -> None:
+    self.conn.execute(
+      "INSERT INTO loadcell_events(tracker_id,t_enter) VALUES(?,?)",
+      (int(tracker_id), ts),
+    )
+    logger.info("Unknown loadcell enter written to DB | tracker_id=%s | ts=%.3f", tracker_id, ts)
 
-    sql = f"""
-    UPDATE gate_cycles
-    SET {col} = ?
-    WHERE id = (
-        SELECT id FROM gate_cycles
-        WHERE t_gate1_close IS NULL
-          OR t_gate2_close IS NULL
+  def loadcell_exit(self, tracker_id: int, ts: float) -> None:
+    cur = self.conn.execute(
+      """
+      UPDATE loadcell_events
+      SET t_exit = ?
+      WHERE id = (
+        SELECT id FROM loadcell_events
+        WHERE tracker_id = ? AND t_exit IS NULL
         ORDER BY id DESC
         LIMIT 1
+      )
+      """,
+      (ts, int(tracker_id)),
     )
-    """
-
-    cur = self.conn.execute(sql, (ts,))
-
     if cur.rowcount == 0:
-        sql = f"INSERT INTO gate_cycles ({col}) VALUES (?)"
-        self.conn.execute(sql, (ts,))
+      self.conn.execute(
+        "INSERT INTO loadcell_events(tracker_id,t_exit) VALUES(?,?)",
+        (int(tracker_id), ts),
+      )
+      logger.info("Unknown loadcell exit written to DB without enter row | tracker_id=%s | ts=%.3f", tracker_id, ts)
+      return
 
-  def gate_close(self, gate, ts):
-
-    col = "t_gate1_close" if gate == "gate1" else "t_gate2_close"
-
-    sql = f"""
-    UPDATE gate_cycles
-    SET {col} = ?
-    WHERE id = (
-        SELECT id FROM gate_cycles
-        WHERE {col} IS NULL
-        ORDER BY id DESC
-        LIMIT 1
-    )
-    """
-
-    self.conn.execute(sql, (ts,))
+    logger.info("Unknown loadcell exit updated in DB | tracker_id=%s | ts=%.3f", tracker_id, ts)
 
 
 
