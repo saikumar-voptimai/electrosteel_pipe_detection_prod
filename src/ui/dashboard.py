@@ -14,7 +14,7 @@ from ui.formatting import fmt_ts
 
 DB_PATH = "var/pipes.db"
 FRAMEPATH = "var/latest.jpg"
-REFRESH_SECONDS = 0.1
+REFRESH_SECONDS = 5
 DEVELOPER_TABLES = (
     "events",
     "settings",
@@ -27,6 +27,14 @@ DEVELOPER_TABLE_ORDER = {
     "gate_open_events": "COALESCE(t_open, id)",
     "loadcell_events": "COALESCE(created_at, t_enter, t_exit, id)",
 }
+DEVELOPER_TIME_COLUMNS = (
+    "ts",
+    "updated_at",
+    "t_open",
+    "t_enter",
+    "t_exit",
+    "created_at",
+)
 
 st.set_page_config(layout="wide", page_title="Pipe Tracking Dashboard")
 
@@ -36,13 +44,6 @@ st.markdown("""
     font-size: 34px;
     font-weight: 800;
     margin-bottom: 20px;
-}
-.card {
-    border: 1px solid #e6e6e6;
-    border-radius: 16px;
-    padding: 18px;
-    background: #ffffff;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.04);
 }
 .block-title {
     font-size: 20px;
@@ -124,6 +125,17 @@ def read_table(table_name, limit=500):
         return pd.read_sql_query(query, conn, params=(limit,))
 
 
+def format_developer_df(df):
+    df = df.copy()
+
+    for c in DEVELOPER_TIME_COLUMNS:
+        if c in df.columns:
+            df[c] = df[c].apply(fmt_ts)
+            df[c] = df[c].map(lambda v: "" if v is None else str(v)).astype(object)
+
+    return df
+
+
 with st.sidebar:
     st.header("Controls")
 
@@ -136,35 +148,41 @@ with st.sidebar:
         set_gate_source(gate_source)
         st.success(f"Gate source set to {gate_source}")
 
+    REFRESH_SECONDS = st.slider(
+        "Refresh interval",
+        min_value=1,
+        max_value=10,
+        value=REFRESH_SECONDS,
+        step=1,
+        format="%d sec",
+    )
+
     developer_mode = st.toggle("Developer Mode", value=False)
 
 
 @st.fragment(run_every=REFRESH_SECONDS)
 def live_frame():
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="block-title">Latest Annotated Frame</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown('<div class="block-title">Latest Annotated Frame</div>', unsafe_allow_html=True)
 
-    frame = Path(FRAMEPATH)
-    if frame.exists():
-        st.image(str(frame), width="stretch", caption="Latest annotated frame")
-    else:
-        st.info("Waiting for latest annotated frame...")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+        frame = Path(FRAMEPATH)
+        if frame.exists():
+            st.image(str(frame), width="stretch", caption="Latest annotated frame")
+        else:
+            st.info("Waiting for latest annotated frame...")
 
 
 @st.fragment(run_every=REFRESH_SECONDS)
 def live_metrics():
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="block-title">Pipes Casted Data</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown('<div class="block-title">Pipes Casted Data</div>', unsafe_allow_html=True)
 
-    r = repo()
+        r = repo()
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Last hour", r.metric_counts(3600))
-    c2.metric("Last 8h", r.metric_counts(8 * 3600))
-    c3.metric("Last 24h", r.metric_counts(24 * 3600))
-    st.markdown("</div>", unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Last hour", r.metric_counts(3600))
+        c2.metric("Last 8h", r.metric_counts(8 * 3600))
+        c3.metric("Last 24h", r.metric_counts(24 * 3600))
 
 
 @st.fragment(run_every=REFRESH_SECONDS)
@@ -198,6 +216,8 @@ def developer_tables():
             except Exception as exc:
                 st.error(f"Could not read {table_name}: {exc}")
                 continue
+
+            df = format_developer_df(df)
 
             st.metric("Rows shown", len(df))
             st.dataframe(
