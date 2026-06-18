@@ -9,13 +9,13 @@ imgsz: 640 # Inference
 conf: 0.25
 iou: 0.5
 
-max_fps: 3
+max_fps: 6
 frame_skip: 0                       # 0 = process every frame, 1 = every alternate, etc.
 
 # Throttle non-inference logic (FSM updates, DB upserts, event handling).
 # 0 = run every inference frame. Example: 6 means update pipe/gate logic at 6Hz
 # while still running inference/tracking each processed frame.
-update_fps: 3 
+update_fps: 6
 
 log_level: "INFO"                   # DEBUG|INFO|WARNING|ERROR
 log_path: "var/pipe_detect.log"     # e.g. "var/pipe_detect.log" (null = console only)
