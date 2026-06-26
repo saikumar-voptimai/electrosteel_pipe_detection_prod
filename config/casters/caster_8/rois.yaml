@@ -16,6 +16,15 @@ roi_caster_origin:
   - 154
 - - 789
   - 50
+roi_pipe_checkpoint:
+- - 669
+  - 47
+- - 462
+  - 154
+- - 733
+  - 154
+- - 789
+  - 50
 roi_left_origin:
 - - 3
   - 0

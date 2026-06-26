@@ -85,6 +85,25 @@ def select_runtime_device(
 
     if torch is not None:
         torch_version = getattr(torch, "__version__", None)
+
+    if suffix == ".engine":
+        ultralytics_device: int | str | None = 0 if requested_norm != "cpu" else "cpu"
+        torch_device = "cuda:0" if ultralytics_device != "cpu" else "cpu"
+        use_half = False
+        return RuntimeDevice(
+            requested=requested,
+            model_path=str(model_path),
+            model_suffix=suffix,
+            torch_available=torch_available,
+            torch_cuda_available=False,
+            torch_version=torch_version,
+            cuda_device_name=None,
+            torch_device=torch_device,
+            ultralytics_device=ultralytics_device,
+            half=use_half,
+        )
+
+    if torch is not None:
         try:
             torch_cuda_available = bool(torch.cuda.is_available())
             if torch_cuda_available:
@@ -100,10 +119,7 @@ def select_runtime_device(
         or isinstance(requested_norm, int)
     )
 
-    if suffix == ".engine":
-        ultralytics_device: int | str | None = 0 if requested_norm != "cpu" else "cpu"
-        torch_device = "cuda:0" if ultralytics_device != "cpu" else "cpu"
-    elif wants_auto:
+    if wants_auto:
         ultralytics_device = 0 if torch_cuda_available else "cpu"
         torch_device = "cuda:0" if torch_cuda_available else "cpu"
     elif wants_cuda:

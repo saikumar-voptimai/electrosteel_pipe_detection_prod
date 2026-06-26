@@ -94,6 +94,7 @@ def _pipes_dataframe(ctx: CasterContext) -> pd.DataFrame:
         columns=[
             "pipe_uid",
             "origin",
+            "pipe_checkpoint",
             "t_origin",
             "t_loadcell_enter",
             "t_loadcell_exit",

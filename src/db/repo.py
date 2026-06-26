@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS pipes (
   pipe_uid TEXT PRIMARY KEY,
   tracker_id INTEGER,
   origin TEXT,
+  pipe_checkpoint INTEGER DEFAULT 0,
   state TEXT,
   t_origin REAL,
   t_loadcell_enter REAL,
@@ -54,6 +55,21 @@ CREATE TABLE IF NOT EXISTS gate_cycles (
   created_at REAL DEFAULT (strftime('%s','now'))
 );
 
+CREATE TABLE IF NOT EXISTS gate_openings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gate_name TEXT NOT NULL,
+  t_open REAL NOT NULL,
+  created_at REAL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS unknown_loadcell_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL NOT NULL,
+  event_type TEXT NOT NULL,
+  tracker_id INTEGER,
+  details TEXT
+);
+
 """
 
 @dataclass
@@ -74,6 +90,7 @@ class SqliteRepo:
         "weight": "REAL",
         "weight_quality": "TEXT",
         "weight_samples": "INTEGER",
+        "pipe_checkpoint": "INTEGER DEFAULT 0",
       },
     )
     self.conn.commit()
@@ -106,6 +123,10 @@ class SqliteRepo:
     """
     self.conn.execute(sql, tuple(row.values()))
     logger.debug("Upsert pipe | uid=%s | origin=%s | state=%s", row.get("pipe_uid"), row.get("origin"), row.get("state"))
+
+  def delete_pipe(self, pipe_uid: str) -> None:
+    self.conn.execute("DELETE FROM pipes WHERE pipe_uid=?", (pipe_uid,))
+    logger.info("Deleted pipe | uid=%s", pipe_uid)
   
   def insert_event(self, event_type: str, pipe_uid: str | None, details: str = "") -> None:
     """
@@ -116,6 +137,31 @@ class SqliteRepo:
       (time.time(), event_type, pipe_uid, details)
     )
     logger.info("Event inserted | type=%s | pipe_uid=%s | details=%s", event_type, pipe_uid, details)
+
+  def insert_unknown_loadcell_event(
+    self,
+    event_type: str,
+    tracker_id: int | None,
+    details: str = "",
+    ts: float | None = None,
+  ) -> None:
+    """
+    Store loadcell events that do not have a stable pipe UID.
+    """
+    event_ts = time.time() if ts is None else ts
+    self.conn.execute(
+      """
+      INSERT INTO unknown_loadcell_events(ts,event_type,tracker_id,details)
+      VALUES(?,?,?,?)
+      """,
+      (event_ts, event_type, tracker_id, details),
+    )
+    logger.info(
+      "Unknown loadcell event inserted | type=%s | tracker_id=%s | details=%s",
+      event_type,
+      tracker_id,
+      details,
+    )
   
   def commit(self) -> None:
     logger.debug("DB commit")
@@ -128,7 +174,7 @@ class SqliteRepo:
     """
     cursor = self.conn.execute(
       """
-      SELECT pipe_uid, origin, t_origin, t_loadcell_enter, t_loadcell_exit, 
+      SELECT pipe_uid, origin, pipe_checkpoint, t_origin, t_loadcell_enter, t_loadcell_exit,
               weight, weight_quality, weight_samples,
              avg_conf_full, avg_conf_till_gate, frames_missing, state, last_seen_ts
       FROM pipes
@@ -136,6 +182,36 @@ class SqliteRepo:
       LIMIT ?
       """,
       (limit,)
+    )
+    return cursor.fetchall()
+
+  def fetch_gate_openings(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent gate opening readings.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT gate_name, t_open, created_at
+      FROM gate_openings
+      ORDER BY t_open DESC
+      LIMIT ?
+      """,
+      (limit,),
+    )
+    return cursor.fetchall()
+
+  def fetch_unknown_loadcell_events(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent loadcell events that did not resolve to a pipe UID.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT ts, event_type, tracker_id, details
+      FROM unknown_loadcell_events
+      ORDER BY ts DESC
+      LIMIT ?
+      """,
+      (limit,),
     )
     return cursor.fetchall()
   
@@ -190,6 +266,10 @@ class SqliteRepo:
     return row[0] if row else default
   
   def gate_open(self, gate, ts):
+    self.conn.execute(
+      "INSERT INTO gate_openings(gate_name,t_open) VALUES(?,?)",
+      (gate, ts),
+    )
 
     col = "t_gate1_open" if gate == "gate1" else "t_gate2_open"
 
@@ -231,5 +311,3 @@ class SqliteRepo:
 
 
      
-
-

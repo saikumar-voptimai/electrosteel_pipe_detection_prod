@@ -51,6 +51,7 @@ db_flush_interval_s: 5.0            # batch DB commits for Pi
 run_headless: true                 # disable display window
 
 origin_confirm_frames: 5
+remove_pipe_id_pipe_checkpoint_not_entered: false   # true = before new UID, delete previous UID only if no loadcell entry and no pipe checkpoint
 loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
 loadcell_exit_confirm_frames: 1
 stale_track_frames: 45

@@ -24,7 +24,7 @@ log_path: "var/caster_3/pipe_detect.log"
 
 db_path: "var/caster_3/caster_3_pipes.db"
 latest_jpg_path: "var/caster_3/latest.jpg"
-publish_fps: 30                      # UI refresh source
+publish_fps: 3                      # UI refresh source
 publish_imgsz: 0              # max width/height of published image (maintain aspect ratio; can be int or [w, h])
 publish_overlay: true                # draw detection/tracking overlay on published image
 history:
@@ -51,6 +51,7 @@ db_flush_interval_s: 5.0            # batch DB commits for Pi
 run_headless: true                 # disable display window
 
 origin_confirm_frames: 5
+remove_pipe_id_pipe_checkpoint_not_entered: false   # true = before new UID, delete previous UID only if no loadcell entry and no pipe checkpoint
 loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
 loadcell_exit_confirm_frames: 1
 stale_track_frames: 45

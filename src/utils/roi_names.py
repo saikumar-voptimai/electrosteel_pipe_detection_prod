@@ -7,6 +7,7 @@ from typing import Iterable, List, Sequence
 class RoiName(str, Enum):
     LOADCELL = "roi_loadcell"
     CASTER_ORIGIN = "roi_caster_origin"
+    PIPE_CHECKPOINT = "roi_pipe_checkpoint"
     LEFT_ORIGIN = "roi_left_origin"
     RIGHT_ORIGIN = "roi_right_origin"
     SAFETY_CRITICAL = "roi_safety_critical"
@@ -20,6 +21,7 @@ class RoiName(str, Enum):
 REQUIRED_ROIS: Sequence[RoiName] = (
     RoiName.LOADCELL,
     RoiName.CASTER_ORIGIN,
+    RoiName.PIPE_CHECKPOINT,
     RoiName.LEFT_ORIGIN,
     RoiName.RIGHT_ORIGIN,
     RoiName.SAFETY_CRITICAL,

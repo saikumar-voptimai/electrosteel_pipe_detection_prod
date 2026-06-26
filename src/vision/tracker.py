@@ -95,7 +95,7 @@ class YoloByteTrack:
       "imgsz": self.imgsz,
       "verbose": False,
     }
-    if self._resolved_device is not None:
+    if self._resolved_device is not None and not self._is_tensorrt:
       track_kwargs["device"] = self._resolved_device
     if self._runtime_device.half:
       track_kwargs["half"] = True

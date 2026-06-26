@@ -121,6 +121,7 @@ class App:
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
       min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
       loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
+      remove_pipe_id_pipe_checkpoint_not_entered=self.cfg.runtime.remove_pipe_id_pipe_checkpoint_not_entered,
     )
 
     # Gate source switching via DB setting
@@ -240,20 +241,39 @@ class App:
         for event in pipe_events:
           logger.info(f"Pipe event: {event}")
           if event.__class__.__name__ == "PipeEnteredLoadcellEvent":
-            repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            if event.pipe_uid:
+              repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            else:
+              repo.insert_unknown_loadcell_event(
+                "pipe_enter_loadcell",
+                event.tracker_id,
+                "missing_pipe_uid",
+                ts=event.t_enter,
+              )
             if "pipe_on_loadcell" in self.cfg.plc.tags:
               plc.pulse(self.cfg.plc.tags["pipe_on_loadcell"], self.cfg.plc.pulse_ms)
 
-            if weight_service is not None:
+            if event.pipe_uid and weight_service is not None:
               ok = weight_service.start(pipe_uid=event.pipe_uid, machine_id=self.cfg.weight.machine_id_default)
               if ok:
                 repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
 
           if event.__class__.__name__ == "PipeExitedLoadcellEvent":
-            repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            if event.pipe_uid:
+              repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            else:
+              repo.insert_unknown_loadcell_event(
+                "pipe_exit_loadcell",
+                event.tracker_id,
+                "missing_pipe_uid",
+                ts=event.t_exit,
+              )
 
             if weight_service is not None:
               weight_service.stop()
+          if event.__class__.__name__ == "PipeRemovedBeforeCheckpointEvent":
+            repo.delete_pipe(event.pipe_uid)
+            repo.insert_event("pipe_deleted", event.pipe_uid, event.reason)
         freq = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
         logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
 
@@ -283,6 +303,7 @@ class App:
             "pipe_uid": p.pipe_uid,
             "tracker_id": p.tracker_id,
             "origin": p.origin,
+            "pipe_checkpoint": 1 if p.pipe_checkpoint else 0,
             "state": p.state,
             "t_origin": p.t_origin,
             "t_loadcell_enter": p.t_loadcell_enter,
