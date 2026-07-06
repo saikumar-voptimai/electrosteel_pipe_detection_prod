@@ -16,4 +16,4 @@ var/latest.jpg
 var/*
 
 # Tests
-tests/videos/*
+tests/videos/**.mp4

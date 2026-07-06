@@ -1,11 +1,14 @@
 # fps, conf thresholds, debounce frames, logging
 video_source: gige 
-model_path: models/yolo/yolo11n_26_16_01.engine
+model_path: models/yolo/yolo11s_26_26_01_grey.engine
 tracker_yaml: "config/casters/caster_1/bytetrack.yaml"
 
 debug_mode: true
 
 imgsz: 640 # Inference
+# Image mode for YOLO/ByteTrack analysis: rgb | grey_scale
+# Aliases such as color/bgr and bw/gray/grey/grayscale are accepted.
+analysis_image_mode: bgr
 conf: 0.25
 iou: 0.5
 device: auto                       # auto = CUDA/TensorRT on Jetson when available, else CPU

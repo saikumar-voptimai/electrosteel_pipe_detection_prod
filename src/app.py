@@ -32,7 +32,7 @@ from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSour
 from logic.events import GateClosedEvent, GateOpenedEvent
 from logic.weight_service import WeightService
 from utils.logging import setup_logging
-from utils.runtime import resize_for_inference
+from utils.runtime import prepare_analysis_frame, resize_for_inference
 from ui.formatting import fmt_ts
 from utils.camera_scheduler import CameraProfileScheduler
 
@@ -49,10 +49,11 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | caster=%s | source=%s | model=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
+      "Starting app | caster=%s | source=%s | model=%s | analysis_image_mode=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
       self.cfg.caster_id,
       self.cfg.runtime.video_source,
       self.cfg.runtime.model_path,
+      self.cfg.runtime.analysis_image_mode,
       self.cfg.runtime.device,
       self.cfg.runtime.half,
       self.cfg.runtime.db_path,
@@ -172,7 +173,11 @@ class App:
         # We get the original frame (and size) as recorded by the source camera
         orig_h, orig_w = frame_orig.shape[:2]       # Ex: VA - Imaging --> (w2620, h1216)
 
-        frame_scaled = resize_for_inference(frame_orig, target_width=self.cfg.runtime.imgsz)
+        frame_scaled = prepare_analysis_frame(
+          frame_orig,
+          target_width=self.cfg.runtime.imgsz,
+          mode=self.cfg.runtime.analysis_image_mode,
+        )
         # imgsz - w960. scaled frame size: (w960, h445)
         # NOTE: This is the frame passed to the ml model for inference.
         # TODO: FPS of the source is 18.0 fps. We can force it along with the inference and rendering fps.
@@ -540,6 +545,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--caster-config", default=None, help="Path to caster config directory or legacy caster YAML.")
   parser.add_argument("--redraw", action="store_true", help="Launch ROI redraw wizard for this caster.")
   parser.add_argument("--video-source", default=None, help="Override video source for redraw/testing.")
+  parser.add_argument("--model-path", default=None, help="Override runtime model path, e.g. a .pt model for CPU backup.")
+  parser.add_argument("--device", default=None, help="Override inference device: auto, cpu, cuda, cuda:0, or a CUDA id.")
+  parser.add_argument("--cpu", action="store_true", help="Force CPU inference and disable half precision.")
+  parser.add_argument("--half", dest="half", action="store_true", default=None, help="Enable half precision when supported.")
+  parser.add_argument("--no-half", dest="half", action="store_false", help="Disable half precision.")
   return parser.parse_args(argv)
 
 
@@ -569,7 +579,20 @@ def main(argv: list[str] | None = None) -> None:
   caster_file = load_caster_file_config(args.caster, args.caster_config)
   if not Path(caster_file.rois).exists():
     raise SystemExit(f"Missing {caster_file.rois}. Run with --caster {caster_file.caster_id} --redraw to create ROIs.")
-  cfg = load_caster_config(args.caster, args.caster_config)
+  runtime_overrides = {}
+  if args.video_source is not None:
+    runtime_overrides["video_source"] = args.video_source
+  if args.model_path is not None:
+    runtime_overrides["model_path"] = args.model_path
+  if args.device is not None:
+    runtime_overrides["device"] = args.device
+  if args.half is not None:
+    runtime_overrides["half"] = args.half
+  if args.cpu:
+    runtime_overrides["device"] = "cpu"
+    runtime_overrides["half"] = False
+
+  cfg = load_caster_config(args.caster, args.caster_config, runtime_overrides=runtime_overrides)
 
   if not cfg.runtime.run_headless:
     os.environ["QT_QPA_PLATFORM"] = "xcb"

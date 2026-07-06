@@ -6,6 +6,9 @@ tracker_yaml: "config/casters/caster_7/bytetrack.yaml"
 debug_mode: true
 
 imgsz: 640 # Inference
+# Image mode for YOLO/ByteTrack analysis: rgb | grey_scale
+# Aliases such as color/bgr and bw/gray/grey/grayscale are accepted.
+analysis_image_mode: rgb
 conf: 0.25
 iou: 0.5
 device: auto                       # auto = CUDA/TensorRT on Jetson when available, else CPU

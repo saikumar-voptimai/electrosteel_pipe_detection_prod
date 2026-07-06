@@ -5,6 +5,8 @@ import yaml
 from pathlib import Path
 import re
 
+from utils.image_mode import normalize_analysis_image_mode
+
 
 Point = Tuple[int, int]
 Polygon = List[Point]
@@ -90,6 +92,7 @@ class RuntimeCfg:
     model_path: str
     tracker_yaml: str
     imgsz: int
+    analysis_image_mode: str
     conf: float
     iou: float
     device: int | str | None
@@ -481,6 +484,7 @@ def load_config(
         model_path=r["model_path"],
         tracker_yaml=r["tracker_yaml"],
         imgsz=int(r.get("imgsz", 640)),
+        analysis_image_mode=normalize_analysis_image_mode(r.get("analysis_image_mode", "rgb")),
         conf=float(r.get("conf", 0.25)),
         iou=float(r.get("iou", 0.5)),
         device=device,
@@ -567,10 +571,16 @@ def load_config(
     )
 
 
-def load_caster_config(caster_id: int | str, caster_config_path: str | None = None) -> AppCfg:
+def load_caster_config(
+    caster_id: int | str,
+    caster_config_path: str | None = None,
+    runtime_overrides: Dict[str, Any] | None = None,
+) -> AppCfg:
     caster_file = load_caster_file_config(caster_id, caster_config_path)
-    runtime_overrides = dict(caster_file.overrides)
-    runtime_overrides.setdefault("tracker_yaml", caster_file.bytetrack)
+    merged_runtime_overrides = dict(caster_file.overrides)
+    if runtime_overrides:
+        merged_runtime_overrides.update(runtime_overrides)
+    merged_runtime_overrides.setdefault("tracker_yaml", caster_file.bytetrack)
 
     cfg = load_config(
         runtime_path=caster_file.runtime,
@@ -578,7 +588,7 @@ def load_caster_config(caster_id: int | str, caster_config_path: str | None = No
         plc_path=caster_file.plc,
         camera_cfg_path=caster_file.camera,
         weight_cfg_path=caster_file.weight,
-        runtime_overrides=runtime_overrides,
+        runtime_overrides=merged_runtime_overrides,
     )
 
     storage_dir = Path(caster_file.storage_dir)

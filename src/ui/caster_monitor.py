@@ -102,9 +102,10 @@ def fetch_recent_pipes(ctx: CasterContext, limit: int = 250) -> list[tuple]:
     if not ctx.db_path.exists():
         return []
     with _connect_readonly(ctx.db_path) as conn:
+        pipe_checkpoint = "pipe_checkpoint" if _has_column(conn, "pipes", "pipe_checkpoint") else "0 AS pipe_checkpoint"
         return conn.execute(
-            """
-            SELECT pipe_uid, origin, t_origin, t_loadcell_enter, t_loadcell_exit,
+            f"""
+            SELECT pipe_uid, origin, {pipe_checkpoint}, t_origin, t_loadcell_enter, t_loadcell_exit,
                    weight, weight_quality, weight_samples,
                    avg_conf_full, avg_conf_till_gate, frames_missing, state, last_seen_ts
             FROM pipes
@@ -160,6 +161,10 @@ def _caster_sort_key(path: Path) -> tuple[int, str]:
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
 def _metrics_from_db(path: Path) -> CasterMetrics:

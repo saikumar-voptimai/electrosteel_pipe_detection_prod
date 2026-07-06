@@ -131,6 +131,15 @@ class VAImagingCameraClient:
             int(self._gx.GxAccessStatus.READONLY): "READONLY",
             int(self._gx.GxAccessStatus.NOACCESS): "NOACCESS",
         }.get(status, str(status))
+        if status == int(self._gx.GxAccessStatus.UNKNOWN):
+            logger.warning(
+                "VA Imaging camera access status is UNKNOWN; attempting open anyway | "
+                "sn=%s ip=%s display_name=%s",
+                device_info.get("sn"),
+                device_info.get("ip"),
+                device_info.get("display_name"),
+            )
+            return
         raise RuntimeError(
             "VA Imaging camera is not available for control access. "
             f"status={status_name}, sn={device_info.get('sn')}, ip={device_info.get('ip')}, "

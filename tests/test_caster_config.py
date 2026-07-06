@@ -125,6 +125,26 @@ class CasterConfigTests(unittest.TestCase):
       self.assertTrue(cfg.runtime.latest_jpg_path.endswith("var/caster_2/latest.jpg"))
       self.assertTrue(cfg.runtime.log_path.endswith("var/caster_2/pipe_detect.log"))
 
+  def test_runtime_overrides_do_not_change_caster_storage_paths(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      caster_config = _caster_fixture(Path(tmp), caster_id=4)
+
+      cfg = load_caster_config(
+        4,
+        str(caster_config),
+        runtime_overrides={
+          "model_path": "models/yolo/yolo11s_26_26_01_grey.pt",
+          "device": "cpu",
+          "half": False,
+        },
+      )
+
+      self.assertEqual(cfg.runtime.model_path, "models/yolo/yolo11s_26_26_01_grey.pt")
+      self.assertEqual(cfg.runtime.device, "cpu")
+      self.assertFalse(cfg.runtime.half)
+      self.assertTrue(cfg.runtime.tracker_yaml.endswith("caster_4/bytetrack.yaml"))
+      self.assertTrue(cfg.runtime.db_path.endswith("var/caster_4/caster_4_pipes.db"))
+
   def test_legacy_caster5_origin_maps_to_general_name(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:
       caster_config = _caster_fixture(Path(tmp), caster_id=5, legacy_rois=True)

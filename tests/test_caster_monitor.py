@@ -11,7 +11,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ui.caster_monitor import aggregate_metrics, get_all_casters, health_rows
+from ui.caster_monitor import aggregate_metrics, fetch_recent_pipes, get_all_casters, health_rows
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -130,6 +130,8 @@ class CasterMonitorTests(unittest.TestCase):
       self.assertEqual(metrics.last_hour, 5)
       self.assertEqual(metrics.last_8h, 5)
       self.assertEqual(metrics.last_24h, 5)
+
+      self.assertEqual(len(fetch_recent_pipes(contexts[0], limit=1)[0]), 14)
 
   def test_health_rows_are_dynamic(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

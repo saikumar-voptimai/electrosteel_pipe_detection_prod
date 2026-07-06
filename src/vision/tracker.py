@@ -80,12 +80,32 @@ class YoloByteTrack:
       return False
     return isinstance(device, str) and device.strip().lower() == "cpu"
 
-  def infer(self, frame: np.ndarray) -> List[TrackDet]:
-    """
-    Run tracking inference on a single frame.
-    Returns list of TrackDet.
-    """
-    t0 = time.perf_counter()
+  @staticmethod
+  def _is_cuda_runtime_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    markers = (
+      "cuda",
+      "cudacachingallocator",
+      "nvml",
+      "nvmap",
+      "out of memory",
+      "cublas",
+      "cudnn",
+    )
+    return any(marker in message for marker in markers)
+
+  def _track_once(self, track_kwargs: dict) -> list:
+    try:
+      import torch
+    except Exception:
+      torch = None
+
+    if torch is not None:
+      with torch.inference_mode():
+        return self.model.track(**track_kwargs)
+    return self.model.track(**track_kwargs)
+
+  def _track_kwargs(self, frame: np.ndarray) -> dict:
     track_kwargs = {
       "source": frame,
       "persist": True,
@@ -99,17 +119,61 @@ class YoloByteTrack:
       track_kwargs["device"] = self._resolved_device
     if self._runtime_device.half:
       track_kwargs["half"] = True
+    return track_kwargs
+
+  def _fallback_to_cpu(self) -> None:
+    logger.warning(
+      "CUDA inference failed for PyTorch model; reloading YOLO on CPU for backup mode | model=%s",
+      self.model_path,
+    )
+    try:
+      del self.model
+    except AttributeError:
+      pass
 
     try:
       import torch
-    except Exception:
-      torch = None
 
-    if torch is not None:
-      with torch.inference_mode():
-        results = self.model.track(**track_kwargs)
-    else:
-      results = self.model.track(**track_kwargs)
+      if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    except Exception:
+      logger.debug("Could not clear CUDA cache before CPU fallback", exc_info=True)
+
+    self._runtime_device = select_runtime_device(
+      requested="cpu",
+      model_path=self.model_path,
+      half=False,
+    )
+    self._resolved_device = self._runtime_device.ultralytics_device
+    self.model = YOLO(self.model_path)
+    logger.warning(
+      "YOLO runtime switched to CPU fallback | ultralytics_device=%s | torch_device=%s | half=%s",
+      self._resolved_device,
+      self._runtime_device.torch_device,
+      self._runtime_device.half,
+    )
+
+  def infer(self, frame: np.ndarray) -> List[TrackDet]:
+    """
+    Run tracking inference on a single frame.
+    Returns list of TrackDet.
+    """
+    t0 = time.perf_counter()
+    track_kwargs = self._track_kwargs(frame)
+
+    try:
+      results = self._track_once(track_kwargs)
+    except RuntimeError as exc:
+      can_retry_cpu = (
+        not self._is_tensorrt
+        and self._runtime_device.is_cuda
+        and self._is_cuda_runtime_error(exc)
+      )
+      if not can_retry_cpu:
+        raise
+      self._fallback_to_cpu()
+      results = self._track_once(self._track_kwargs(frame))
+
     dt_ms = (time.perf_counter() - t0) * 1000.0
     if not results:
       logger.debug("YOLO.track returned no results | dt_ms=%.1f", dt_ms)
