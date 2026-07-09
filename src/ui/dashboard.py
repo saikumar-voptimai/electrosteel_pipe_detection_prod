@@ -173,9 +173,13 @@ def _camera_label(ctx: CasterContext) -> tuple[str, str]:
 
 def _show_image(path: Path) -> None:
     try:
-        st.image(str(path), use_container_width=True)
+        st.image(str(path), width="stretch")
     except TypeError:
         st.image(str(path), use_column_width=True)
+
+
+def _show_dataframe(df: pd.DataFrame) -> None:
+    st.dataframe(df, width="stretch", hide_index=True)
 
 
 def _metric_row(metrics, *, active_count: int | None = None, total_count: int | None = None) -> None:
@@ -250,7 +254,7 @@ def _health_table(
     if not rows:
         st.info(empty_message)
         return
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    _show_dataframe(pd.DataFrame(rows))
 
 
 def _pipes_dataframe(ctx: CasterContext) -> pd.DataFrame:
@@ -325,7 +329,7 @@ def _single_caster_view(
 
     with tab_pipes:
         st.markdown(f'<div class="section-title">Recent Pipes - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)
-        st.dataframe(_pipes_dataframe(ctx), use_container_width=True, hide_index=True)
+        _show_dataframe(_pipes_dataframe(ctx))
 
     with tab_logs:
         st.markdown(f'<div class="section-title">Logs - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)
