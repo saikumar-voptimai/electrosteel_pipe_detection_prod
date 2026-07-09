@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import tempfile
@@ -11,7 +12,14 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ui.caster_monitor import aggregate_metrics, fetch_recent_pipes, get_all_casters, health_rows
+from ui.caster_monitor import (
+  active_caster_contexts,
+  aggregate_metrics,
+  caster_statuses,
+  fetch_recent_pipes,
+  get_all_casters,
+  health_rows,
+)
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
@@ -138,6 +146,28 @@ class CasterMonitorTests(unittest.TestCase):
       contexts = get_all_casters(Path(tmp))
       self.assertEqual(health_rows(contexts), [])
 
+  def test_active_casters_follow_latest_frame_age(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      _caster_dir(root, 1)
+      _caster_dir(root, 2)
+      contexts = get_all_casters(root)
+
+      contexts[0].latest_frame_path.write_bytes(b"fresh")
+      contexts[1].latest_frame_path.write_bytes(b"stale")
+      stale_ts = time.time() - 600
+      os.utime(contexts[1].latest_frame_path, (stale_ts, stale_ts))
+
+      statuses = caster_statuses(contexts, active_after_s=30)
+      self.assertTrue(statuses["caster_1"].is_active)
+      self.assertFalse(statuses["caster_2"].is_active)
+      self.assertEqual(
+        [ctx.caster_key for ctx in active_caster_contexts(contexts, active_after_s=30)],
+        ["caster_1"],
+      )
+
+      rows = health_rows(contexts, active_after_s=30, statuses=statuses)
+      self.assertEqual([row["Active"] for row in rows], ["Yes", "No"])
 
 if __name__ == "__main__":
   unittest.main()

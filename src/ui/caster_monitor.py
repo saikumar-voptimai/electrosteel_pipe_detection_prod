@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ui.formatting import fmt_ts
 from utils.config import AppCfg, load_caster_config, resolve_caster_id
 
 
@@ -21,11 +23,13 @@ class CasterMetrics:
 class CasterStatus:
     caster_key: str
     camera_type: str
+    is_active: bool
     camera_status: str
     app_status: str
     plc_status: str
     database_status: str
     last_detection_ts: float | None
+    latest_frame_ts: float | None
     latest_frame_age_s: float | None
     alerts: tuple[str, ...] = ()
 
@@ -98,6 +102,15 @@ def get_caster_status(caster_id: int | str) -> CasterStatus:
     return _status_for_context(ctx)
 
 
+def caster_statuses(contexts: list[CasterContext], active_after_s: float = 30.0) -> dict[str, CasterStatus]:
+    return {ctx.caster_key: _status_for_context(ctx, active_after_s=active_after_s) for ctx in contexts}
+
+
+def active_caster_contexts(contexts: list[CasterContext], active_after_s: float = 30.0) -> list[CasterContext]:
+    statuses = caster_statuses(contexts, active_after_s=active_after_s)
+    return [ctx for ctx in contexts if statuses[ctx.caster_key].is_active]
+
+
 def fetch_recent_pipes(ctx: CasterContext, limit: int = 250) -> list[tuple]:
     if not ctx.db_path.exists():
         return []
@@ -133,18 +146,25 @@ def aggregate_metrics(contexts: list[CasterContext]) -> CasterMetrics:
     )
 
 
-def health_rows(contexts: list[CasterContext]) -> list[dict[str, Any]]:
+def health_rows(
+    contexts: list[CasterContext],
+    active_after_s: float = 30.0,
+    statuses: dict[str, CasterStatus] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    statuses = statuses or caster_statuses(contexts, active_after_s=active_after_s)
     for ctx in contexts:
-        status = _status_for_context(ctx)
+        status = statuses[ctx.caster_key]
         rows.append(
             {
                 "Caster": ctx.caster_key,
+                "Active": "Yes" if status.is_active else "No",
                 "Camera": f"{status.camera_type} / {status.camera_status}",
                 "Status": status.app_status,
                 "PLC": status.plc_status,
                 "Database": status.database_status,
                 "Last Detection": _age_label(status.last_detection_ts),
+                "Last Frame": fmt_ts(status.latest_frame_ts),
                 "Frame Age": _seconds_label(status.latest_frame_age_s),
                 "Alerts": ", ".join(status.alerts),
             }
@@ -159,8 +179,13 @@ def _caster_sort_key(path: Path) -> tuple[int, str]:
         return (10**9, path.name)
 
 
-def _connect_readonly(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+@contextmanager
+def _connect_readonly(path: Path):
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -207,33 +232,37 @@ def _avg_conf_since(conn: sqlite3.Connection, cutoff_ts: float) -> float:
     return float(value) if value is not None else 0.0
 
 
-def _status_for_context(ctx: CasterContext) -> CasterStatus:
+def _status_for_context(ctx: CasterContext, active_after_s: float = 30.0) -> CasterStatus:
     now = time.time()
     camera_type = ctx.cfg.camera_cfg.type if ctx.cfg.camera_cfg else "opencv"
-    frame_age = (now - ctx.latest_frame_path.stat().st_mtime) if ctx.latest_frame_path.exists() else None
+    latest_frame_ts = ctx.latest_frame_path.stat().st_mtime if ctx.latest_frame_path.exists() else None
+    frame_age = (now - latest_frame_ts) if latest_frame_ts is not None else None
     database_status = _database_status(ctx.db_path)
     last_detection_ts = _last_detection_ts(ctx.db_path)
+    is_active = frame_age is not None and frame_age <= active_after_s
 
     alerts: list[str] = []
     if frame_age is None:
         alerts.append("no frame")
-    elif frame_age > 30:
+    elif frame_age > active_after_s:
         alerts.append("stale frame")
     if database_status != "Healthy":
         alerts.append("db unavailable")
 
-    camera_status = "Connected" if frame_age is not None and frame_age <= 30 else "No recent frame"
-    app_status = "Running" if frame_age is not None and frame_age <= 30 else "Idle"
+    camera_status = "Connected" if is_active else "No recent frame"
+    app_status = "Running" if is_active else "Idle"
     plc_status = "Mock" if ctx.cfg.plc.mode.lower() == "mock" else "Configured"
 
     return CasterStatus(
         caster_key=ctx.caster_key,
         camera_type=camera_type,
+        is_active=is_active,
         camera_status=camera_status,
         app_status=app_status,
         plc_status=plc_status,
         database_status=database_status,
         last_detection_ts=last_detection_ts,
+        latest_frame_ts=latest_frame_ts,
         latest_frame_age_s=frame_age,
         alerts=tuple(alerts),
     )
