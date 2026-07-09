@@ -1,5 +1,5 @@
 # fps, conf thresholds, debounce frames, logging
-video_source: 4 
+video_source: test2.mp4 
 model_path: models/yolo/yolo11n_26_16_01.engine
 tracker_yaml: "config/casters/caster_5/bytetrack.yaml"
 

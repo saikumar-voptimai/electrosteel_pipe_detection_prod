@@ -103,21 +103,66 @@ class VAImagingCameraClient:
                 img.convert("RGB")
 
     def _resolve_device_info(self, dev_info_list: list[dict[str, Any]]) -> dict[str, Any]:
-        wanted = str(self.camera_cfg.id).strip()
-        if wanted and not wanted.isdigit():
+        wanted_id = str(self.camera_cfg.id).strip()
+        wanted_ip = str((self.camera_cfg.va_imaging or {}).get("ip", "")).strip()
+
+        if wanted_id and wanted_id != "0":
             for info in dev_info_list:
-                if wanted in {
-                    str(info.get("sn", "")),
-                    str(info.get("ip", "")),
-                    str(info.get("mac", "")),
-                    str(info.get("user_id", "")),
-                    str(info.get("display_name", "")),
-                    str(info.get("model_name", "")),
-                    str(info.get("device_id", "")),
-                }:
+                if wanted_id in self._device_identifiers(info):
+                    info_ip = str(info.get("ip", "")).strip()
+                    if wanted_ip and info_ip and wanted_ip != info_ip:
+                        logger.warning(
+                            "Configured VA Imaging camera id matched but configured ip differs | "
+                            "id=%s configured_ip=%s detected_ip=%s",
+                            wanted_id,
+                            wanted_ip,
+                            info_ip,
+                        )
                     return info
-            logger.warning("Configured VA Imaging camera id not found; using first detected camera | id=%s", wanted)
+
+        if wanted_ip:
+            for info in dev_info_list:
+                if wanted_ip == str(info.get("ip", "")).strip():
+                    return info
+
+        if wanted_id and wanted_id != "0" or wanted_ip:
+            raise RuntimeError(
+                "Configured VA Imaging camera was not detected. "
+                f"id={wanted_id or '<unset>'}, ip={wanted_ip or '<unset>'}. "
+                f"Detected cameras: {self._format_detected_devices(dev_info_list)}"
+            )
         return dev_info_list[0]
+
+    @staticmethod
+    def _device_identifiers(device_info: dict[str, Any]) -> set[str]:
+        return {
+            str(device_info.get("sn", "")).strip(),
+            str(device_info.get("ip", "")).strip(),
+            str(device_info.get("mac", "")).strip(),
+            str(device_info.get("user_id", "")).strip(),
+            str(device_info.get("display_name", "")).strip(),
+            str(device_info.get("model_name", "")).strip(),
+            str(device_info.get("device_id", "")).strip(),
+        }
+
+    def _format_detected_devices(self, dev_info_list: list[dict[str, Any]]) -> str:
+        return "; ".join(
+            (
+                f"sn={info.get('sn')}, ip={info.get('ip')}, user_id={info.get('user_id')}, "
+                f"status={self._access_status_name(int(info.get('access_status', 0) or 0))}"
+            )
+            for info in dev_info_list
+        )
+
+    def _access_status_name(self, status: int) -> str:
+        if self._gx is None:
+            return str(status)
+        return {
+            int(self._gx.GxAccessStatus.UNKNOWN): "UNKNOWN",
+            int(self._gx.GxAccessStatus.READWRITE): "READWRITE",
+            int(self._gx.GxAccessStatus.READONLY): "READONLY",
+            int(self._gx.GxAccessStatus.NOACCESS): "NOACCESS",
+        }.get(status, str(status))
 
     def _validate_control_access(self, device_info: dict[str, Any]) -> None:
         if self._gx is None:
@@ -125,12 +170,7 @@ class VAImagingCameraClient:
         status = int(device_info.get("access_status", 0) or 0)
         if status == int(self._gx.GxAccessStatus.READWRITE):
             return
-        status_name = {
-            int(self._gx.GxAccessStatus.UNKNOWN): "UNKNOWN",
-            int(self._gx.GxAccessStatus.READWRITE): "READWRITE",
-            int(self._gx.GxAccessStatus.READONLY): "READONLY",
-            int(self._gx.GxAccessStatus.NOACCESS): "NOACCESS",
-        }.get(status, str(status))
+        status_name = self._access_status_name(status)
         if status == int(self._gx.GxAccessStatus.UNKNOWN):
             logger.warning(
                 "VA Imaging camera access status is UNKNOWN; attempting open anyway | "

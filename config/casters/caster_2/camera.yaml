@@ -1,28 +1,28 @@
 camera:
-  type: basler
-  width: 1920
-  height: 1280
-  fps: 5
-  basler:
-    # Seen in pylon Viewer as Basler (25343513), GigE IP 192.168.1.124.
-    ip_address: "192.168.1.124"
-    serial_number: "25343513"
-    device_user_id: ""
-    exposure_time: null
-    gain: null
-    grab_strategy: latest_image_only
-    timeout_ms: 1000
-    pixel_format: Mono8
-    # Keep Basler bandwidth low enough to share the GigE network with caster_1.
-    # Full sensor 5472x3648 Mono8 at ~5 FPS is ~100 MB/s before VA traffic.
-    width: 1920
-    height: 1280
-    offset_x: 0
-    offset_y: 0
-    acquisition_frame_rate: 5
-    packet_size: 1500
-    inter_packet_delay: 1000
-    max_num_buffer: 30
-  reconnect:
-    max_retries: 3
-    sleep_s: 2.0
+  type: va_imaging
+  va_imaging:
+    id: "FBU25100061"
+    ip: "192.168.8.102"
+    width: 2620
+    height: 1216
+    fps: 8
+    reconnect:
+      max_retries: 3
+      sleep_s: 2.0
+    profiles:
+      day:
+        start: "08:00"
+        end: "18:00"
+        exposure_us: 80000
+        gain_db: 10
+        gamma_enable: false
+        gamma: 0.8
+      night:
+        start: "18:00"
+        end: "08:00"
+        exposure_us: 100000
+        gain_db: 12
+        gamma_enable: false
+        gamma: 1.4
+    auto_exposure: false
+    auto_gain: false

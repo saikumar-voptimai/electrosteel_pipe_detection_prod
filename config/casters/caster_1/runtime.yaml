@@ -1,9 +1,9 @@
 # fps, conf thresholds, debounce frames, logging
 video_source: gige 
-model_path: models/yolo/yolo11s_26_26_01_grey.engine
+model_path: models/yolo/yolo11n_26_23_01.engine
 tracker_yaml: "config/casters/caster_1/bytetrack.yaml"
 
-debug_mode: true
+debug_mode: false
 
 imgsz: 640 # Inference
 # Image mode for YOLO/ByteTrack analysis: rgb | grey_scale
@@ -28,8 +28,8 @@ log_path: "var/caster_1/pipe_detect.log"
 db_path: "var/caster_1/caster_1_pipes.db"
 latest_jpg_path: "var/caster_1/latest.jpg"
 publish_fps: 30                      # UI refresh source
-publish_imgsz: 0              # max width/height of published image (maintain aspect ratio; can be int or [w, h])
-publish_overlay: true                # draw detection/tracking overlay on published image
+publish_imgsz: [1310, 608]              # max width/height of published image (maintain aspect ratio; can be int or [w, h])
+publish_overlay: true               # draw detection/tracking overlay on published image
 history:
   enabled: false
   base_dir: var/caster_1/history

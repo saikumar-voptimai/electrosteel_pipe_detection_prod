@@ -11,16 +11,16 @@ camera:
       sleep_s: 2.0
     profiles:
       day:
-        start: "06:00"
+        start: "08:00"
         end: "18:00"
-        exposure_us: 14000
-        gain_db: 5
+        exposure_us: 80000
+        gain_db: 10
         gamma_enable: false
         gamma: 0.8
       night:
         start: "18:00"
-        end: "06:00"
-        exposure_us: 14000
+        end: "08:00"
+        exposure_us: 100000
         gain_db: 12
         gamma_enable: false
         gamma: 1.4

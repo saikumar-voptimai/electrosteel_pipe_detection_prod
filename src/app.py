@@ -409,21 +409,22 @@ class App:
         frame_idx += 1
         iter_duration = time.time() - iter_time
         runfps = 1.0 / iter_duration if iter_duration > 0 else 0.0
-        fps_log_frames += 1
-        fps_log_elapsed = time.time() - last_fps_log
-        if fps_log_elapsed >= fps_log_interval_s:
-          avg_fps = fps_log_frames / fps_log_elapsed if fps_log_elapsed > 0 else 0.0
-          logger.info(
-            "Runtime FPS | current=%.2f | avg_%.0fs=%.2f | frame_idx=%d | inference_ms=%.1f | loop_ms=%.1f",
-            runfps,
-            fps_log_interval_s,
-            avg_fps,
-            frame_idx,
-            (st3 - st2) * 1000.0,
-            iter_duration * 1000.0,
-          )
-          last_fps_log = time.time()
-          fps_log_frames = 0
+        if self.cfg.runtime.debug_mode:
+          fps_log_frames += 1
+          fps_log_elapsed = time.time() - last_fps_log
+          if fps_log_elapsed >= fps_log_interval_s:
+            avg_fps = fps_log_frames / fps_log_elapsed if fps_log_elapsed > 0 else 0.0
+            logger.info(
+              "Runtime FPS | current=%.2f | avg_%.0fs=%.2f | frame_idx=%d | inference_ms=%.1f | loop_ms=%.1f",
+              runfps,
+              fps_log_interval_s,
+              avg_fps,
+              frame_idx,
+              (st3 - st2) * 1000.0,
+              iter_duration * 1000.0,
+            )
+            last_fps_log = time.time()
+            fps_log_frames = 0
         logger.debug("Frame processed | idx=%d | iter_duration=%.3f s | runfps=%.2f", frame_idx, iter_duration, runfps)
 
         st6 = time.time()

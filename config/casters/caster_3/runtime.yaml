@@ -1,7 +1,7 @@
 # fps, conf thresholds, debounce frames, logging
-video_source:  test1.mp4
+video_source: gige
 model_path: models/yolo/yolo11n_26_16_01.engine
-tracker_yaml: "config/casters/caster_3/bytetrack.yaml"
+tracker_yaml: "config/casters/caster_2/bytetrack.yaml"
 
 debug_mode: true
 
@@ -23,16 +23,16 @@ frame_skip: 0                       # 0 = process every frame, 1 = every alterna
 update_fps: 6
 
 log_level: "INFO"                   # DEBUG|INFO|WARNING|ERROR
-log_path: "var/caster_3/pipe_detect.log"
+log_path: "var/caster_2/pipe_detect.log"
 
-db_path: "var/caster_3/caster_3_pipes.db"
-latest_jpg_path: "var/caster_3/latest.jpg"
-publish_fps: 3                      # UI refresh source
+db_path: "var/caster_2/caster_2_pipes.db"
+latest_jpg_path: "var/caster_2/latest.jpg"
+publish_fps: 30                      # UI refresh source
 publish_imgsz: 0              # max width/height of published image (maintain aspect ratio; can be int or [w, h])
 publish_overlay: true                # draw detection/tracking overlay on published image
 history:
   enabled: false
-  base_dir: var/caster_3/history
+  base_dir: var/caster_2/history
   date_folder_format: "%Y_%m_%d"
   prefix: pipe
   time_filename_format: "%d-%m-%Y-%H-%M-%S-%f"
