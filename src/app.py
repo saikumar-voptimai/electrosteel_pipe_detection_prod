@@ -29,6 +29,7 @@ from plc.factory import create_plc
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.trolley_gate2_monitor import TrolleyGate2Monitor
 from logic.events import GateClosedEvent, GateOpenedEvent
 from logic.weight_service import WeightService
 from utils.logging import setup_logging
@@ -131,6 +132,10 @@ class App:
     gate_source = repo.get_setting("gate_source", default_gate_source)
 
     gate_fsm = self._build_gate_fsm(gate_source, rois, plc)
+    trolley_gate2_monitor = TrolleyGate2Monitor(
+      rois=rois,
+      stale_track_frames=self.cfg.runtime.stale_track_frames,
+    )
 
     publisher = LatestFramePublisher(
       out_path=self.cfg.runtime.latest_jpg_path,
@@ -241,6 +246,14 @@ class App:
         # Update pipe FSM (full logic)
         updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
         logger.debug("Pipe FSM updated | idx=%d | updated=%d | events=%d", frame_idx, len(updated_pipes), len(pipe_events))
+
+        trolley_gate2_events = trolley_gate2_monitor.update(frame_idx=frame_idx, timestamp=ts, dets=dets_orig)
+        for event in trolley_gate2_events:
+          repo.insert_trolley_gate2_intersection(
+            timestamp=event.timestamp,
+            trolley_track_id=event.trolley_track_id,
+            pipe_on_trolley=event.pipe_on_trolley,
+          )
 
         # Handle pipe events + optional extra PLC tag for debugging
         for event in pipe_events:

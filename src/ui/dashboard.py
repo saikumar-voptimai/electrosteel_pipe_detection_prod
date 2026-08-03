@@ -21,6 +21,7 @@ from ui.caster_monitor import (
     aggregate_metrics,
     caster_statuses,
     fetch_recent_pipes,
+    fetch_recent_trolley_gate2_intersections,
     get_all_casters,
     health_rows,
     read_log_tail,
@@ -287,6 +288,19 @@ def _pipes_dataframe(ctx: CasterContext) -> pd.DataFrame:
     return df
 
 
+def _trolley_gate2_dataframe(ctx: CasterContext) -> pd.DataFrame:
+    rows = fetch_recent_trolley_gate2_intersections(ctx, limit=250)
+    df = pd.DataFrame(
+        rows,
+        columns=["id", "timestamp", "trolley_track_id", "pipe_on_trolley"],
+    )
+    if "timestamp" in df.columns:
+        df["timestamp"] = df["timestamp"].apply(fmt_ts)
+    if "pipe_on_trolley" in df.columns:
+        df["pipe_on_trolley"] = df["pipe_on_trolley"].map({1: "Yes", 0: "No"}).fillna(df["pipe_on_trolley"])
+    return df
+
+
 def _read_gate_source(ctx: CasterContext) -> str:
     default = ctx.cfg.runtime.gate.source_default
     if not ctx.db_path.exists():
@@ -321,7 +335,9 @@ def _single_caster_view(
     metrics = aggregate_metrics([ctx])
     _single_metric_row(metrics, status)
 
-    tab_live, tab_pipes, tab_logs, tab_config = st.tabs(["Live", "Recent Pipes", "Logs", "Configuration"])
+    tab_live, tab_pipes, tab_trolley, tab_logs, tab_config = st.tabs(
+        ["Live", "Recent Pipes", "Trolley Gate2", "Logs", "Configuration"]
+    )
 
     with tab_live:
         _health_table([ctx], statuses, active_window_s)
@@ -330,6 +346,10 @@ def _single_caster_view(
     with tab_pipes:
         st.markdown(f'<div class="section-title">Recent Pipes - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)
         _show_dataframe(_pipes_dataframe(ctx))
+
+    with tab_trolley:
+        st.markdown(f'<div class="section-title">Trolley Gate2 - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)
+        _show_dataframe(_trolley_gate2_dataframe(ctx))
 
     with tab_logs:
         st.markdown(f'<div class="section-title">Logs - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)

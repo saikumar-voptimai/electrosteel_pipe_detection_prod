@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS unknown_loadcell_events (
   details TEXT
 );
 
+CREATE TABLE IF NOT EXISTS trolley_gate2_intersections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp REAL NOT NULL,
+  trolley_track_id INTEGER NOT NULL,
+  pipe_on_trolley INTEGER NOT NULL CHECK (pipe_on_trolley IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trolley_gate2_intersections_timestamp
+ON trolley_gate2_intersections(timestamp);
+
 """
 
 @dataclass
@@ -162,6 +172,25 @@ class SqliteRepo:
       tracker_id,
       details,
     )
+
+  def insert_trolley_gate2_intersection(
+    self,
+    timestamp: float,
+    trolley_track_id: int,
+    pipe_on_trolley: bool,
+  ) -> None:
+    self.conn.execute(
+      """
+      INSERT INTO trolley_gate2_intersections(timestamp,trolley_track_id,pipe_on_trolley)
+      VALUES(?,?,?)
+      """,
+      (timestamp, trolley_track_id, 1 if pipe_on_trolley else 0),
+    )
+    logger.info(
+      "Trolley gate2 intersection inserted | track_id=%s | pipe_on_trolley=%s",
+      trolley_track_id,
+      int(pipe_on_trolley),
+    )
   
   def commit(self) -> None:
     logger.debug("DB commit")
@@ -209,6 +238,21 @@ class SqliteRepo:
       SELECT ts, event_type, tracker_id, details
       FROM unknown_loadcell_events
       ORDER BY ts DESC
+      LIMIT ?
+      """,
+      (limit,),
+    )
+    return cursor.fetchall()
+
+  def fetch_trolley_gate2_intersections(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent trolley intersections with the gate2 closed ROI.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT id, timestamp, trolley_track_id, pipe_on_trolley
+      FROM trolley_gate2_intersections
+      ORDER BY timestamp DESC
       LIMIT ?
       """,
       (limit,),

@@ -17,6 +17,7 @@ from ui.caster_monitor import (
   aggregate_metrics,
   caster_statuses,
   fetch_recent_pipes,
+  fetch_recent_trolley_gate2_intersections,
   get_all_casters,
   health_rows,
 )
@@ -140,6 +141,45 @@ class CasterMonitorTests(unittest.TestCase):
       self.assertEqual(metrics.last_24h, 5)
 
       self.assertEqual(len(fetch_recent_pipes(contexts[0], limit=1)[0]), 14)
+
+  def test_fetch_recent_trolley_gate2_intersections_is_per_caster_and_optional(self) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+      root = Path(tmp)
+      _caster_dir(root, 1)
+      _caster_dir(root, 2)
+      contexts = get_all_casters(root)
+
+      _create_db(contexts[0].db_path, 1)
+      _create_db(contexts[1].db_path, 1)
+      self.assertEqual(fetch_recent_trolley_gate2_intersections(contexts[0]), [])
+
+      conn = sqlite3.connect(contexts[0].db_path)
+      conn.execute(
+        """
+        CREATE TABLE trolley_gate2_intersections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp REAL NOT NULL,
+          trolley_track_id INTEGER NOT NULL,
+          pipe_on_trolley INTEGER NOT NULL
+        )
+        """
+      )
+      conn.execute(
+        "INSERT INTO trolley_gate2_intersections(timestamp,trolley_track_id,pipe_on_trolley) VALUES(?,?,?)",
+        (10.0, 7, 1),
+      )
+      conn.execute(
+        "INSERT INTO trolley_gate2_intersections(timestamp,trolley_track_id,pipe_on_trolley) VALUES(?,?,?)",
+        (12.0, 8, 0),
+      )
+      conn.commit()
+      conn.close()
+
+      self.assertEqual(
+        fetch_recent_trolley_gate2_intersections(contexts[0]),
+        [(2, 12.0, 8, 0), (1, 10.0, 7, 1)],
+      )
+      self.assertEqual(fetch_recent_trolley_gate2_intersections(contexts[1]), [])
 
   def test_health_rows_are_dynamic(self) -> None:
     with tempfile.TemporaryDirectory() as tmp:

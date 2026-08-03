@@ -17,3 +17,5 @@ var/*
 
 # Tests
 tests/videos/**.mp4
+
+*.mp4

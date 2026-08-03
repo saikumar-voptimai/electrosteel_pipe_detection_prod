@@ -129,6 +129,23 @@ def fetch_recent_pipes(ctx: CasterContext, limit: int = 250) -> list[tuple]:
         ).fetchall()
 
 
+def fetch_recent_trolley_gate2_intersections(ctx: CasterContext, limit: int = 250) -> list[tuple]:
+    if not ctx.db_path.exists():
+        return []
+    with _connect_readonly(ctx.db_path) as conn:
+        if not _has_table(conn, "trolley_gate2_intersections"):
+            return []
+        return conn.execute(
+            """
+            SELECT id, timestamp, trolley_track_id, pipe_on_trolley
+            FROM trolley_gate2_intersections
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+
 def read_log_tail(ctx: CasterContext, max_lines: int = 80) -> str:
     if ctx.log_path is None or not ctx.log_path.exists():
         return ""
@@ -190,6 +207,14 @@ def _connect_readonly(path: Path):
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
 
 
 def _metrics_from_db(path: Path) -> CasterMetrics:
