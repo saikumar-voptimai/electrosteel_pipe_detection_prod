@@ -76,6 +76,13 @@ class Capture:
         if self._client is not None and hasattr(self._client, "apply_profile"):
             self._client.apply_profile(profile)
 
+    def apply_camera_controls(self, *, auto_exposure: bool, auto_gain: bool) -> None:
+        if self._client is not None and hasattr(self._client, "apply_camera_controls"):
+            self._client.apply_camera_controls(
+                auto_exposure=auto_exposure,
+                auto_gain=auto_gain,
+            )
+
     def close(self) -> None:
         if self._client is not None:
             self._client.close()

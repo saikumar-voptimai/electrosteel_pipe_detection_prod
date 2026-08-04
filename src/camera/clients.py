@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, Tuple
 
 import numpy as np
@@ -207,20 +207,36 @@ class VAImagingCameraClient:
         except Exception as exc:
             logger.warning("VA Imaging base camera configuration failed: %s", exc)
 
+    def apply_camera_controls(self, *, auto_exposure: bool, auto_gain: bool) -> None:
+        if self._cam is None or self._gx is None:
+            return
+        self.camera_cfg = replace(
+            self.camera_cfg,
+            auto_exposure=bool(auto_exposure),
+            auto_gain=bool(auto_gain),
+        )
+        try:
+            if hasattr(self._cam, "ExposureAuto"):
+                self._cam.ExposureAuto.set(
+                    self._gx.GxAutoEntry.CONTINUOUS if auto_exposure else self._gx.GxAutoEntry.OFF
+                )
+            if hasattr(self._cam, "GainAuto"):
+                self._cam.GainAuto.set(
+                    self._gx.GxAutoEntry.CONTINUOUS if auto_gain else self._gx.GxAutoEntry.OFF
+                )
+        except Exception as exc:
+            logger.warning("VA Imaging auto exposure/gain apply failed: %s", exc)
+
     def apply_profile(self, profile: CameraProfileCfg | None) -> None:
         if profile is None or self._cam is None or self._gx is None:
             return
-        if self.camera_cfg.auto_exposure or self.camera_cfg.auto_gain:
-            logger.info("Skipping VA Imaging profile; auto exposure/gain enabled")
-            return
-
         cam = self._cam
         gx = self._gx
         try:
             logger.info("Applying VA Imaging camera profile | exposure=%s gain=%s", profile.exposure_us, profile.gain_db)
-            if hasattr(cam, "ExposureTime"):
+            if not self.camera_cfg.auto_exposure and hasattr(cam, "ExposureTime"):
                 cam.ExposureTime.set(profile.exposure_us)
-            if hasattr(cam, "Gain"):
+            if not self.camera_cfg.auto_gain and hasattr(cam, "Gain"):
                 cam.Gain.set(profile.gain_db)
             if hasattr(cam, "GammaEnable"):
                 cam.GammaEnable.set(bool(profile.gamma_enable))

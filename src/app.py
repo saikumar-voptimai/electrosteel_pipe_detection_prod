@@ -35,6 +35,7 @@ from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import prepare_analysis_frame, resize_for_inference
 from ui.formatting import fmt_ts
+from utils.camera_profiles import default_camera_profiles
 from utils.camera_scheduler import CameraProfileScheduler
 
 logger = logging.getLogger("pipe_detect")
@@ -90,10 +91,11 @@ class App:
     # Start camera profile scheduler. 
     scheduler = None
 
-    if self.cfg.camera_cfg and self.cfg.camera_cfg.profiles and capture._is_gige():
+    if self.cfg.camera_cfg and capture._is_gige():
         scheduler = CameraProfileScheduler(
             capture,
-            self.cfg.camera_cfg.profiles
+            self.cfg.camera_cfg.profiles or default_camera_profiles(),
+            config_path=self.cfg.camera_cfg_path,
         )
         scheduler.start()
 

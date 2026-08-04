@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -27,7 +28,14 @@ from ui.caster_monitor import (
     read_log_tail,
 )
 from ui.formatting import fmt_ts
-from utils.config import resolve_caster_id
+from utils.camera_profiles import (
+    CameraControlState,
+    active_camera_profile,
+    load_camera_control_state,
+    save_camera_control_state,
+    validate_camera_profiles,
+)
+from utils.config import CameraProfileCfg, resolve_caster_id
 
 
 ALL_CASTERS = "All Casters"
@@ -325,6 +333,168 @@ def _write_gate_source(ctx: CasterContext, gate_source: str) -> None:
         repo.close()
 
 
+def _camera_profile_rows(state: CameraControlState) -> list[dict]:
+    return [
+        {
+            "Profile": name,
+            "Start": profile.start,
+            "End": profile.end,
+            "Exposure (µs)": profile.exposure_us,
+            "Gain (dB)": profile.gain_db,
+            "Gamma enabled": profile.gamma_enable,
+            "Gamma": profile.gamma,
+        }
+        for name, profile in state.profiles.items()
+    ]
+
+
+def _profiles_from_editor(editor_value: pd.DataFrame) -> dict[str, CameraProfileCfg]:
+    profiles: dict[str, CameraProfileCfg] = {}
+    for row in editor_value.to_dict(orient="records"):
+        name_value = row.get("Profile")
+        name = "" if pd.isna(name_value) else str(name_value).strip()
+        if not name:
+            raise ValueError("Every profile row needs a unique name.")
+        if name in profiles:
+            raise ValueError(f"Duplicate camera profile name: {name!r}.")
+        try:
+            profiles[name] = CameraProfileCfg(
+                start=str(row["Start"]).strip(),
+                end=str(row["End"]).strip(),
+                exposure_us=int(row["Exposure (µs)"]),
+                gain_db=int(row["Gain (dB)"]),
+                gamma_enable=bool(row["Gamma enabled"]),
+                gamma=float(row["Gamma"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Profile {name!r} contains an invalid camera value.") from exc
+    return validate_camera_profiles(profiles)
+
+
+def _clear_camera_schedule_feedback() -> None:
+    for key in list(st.session_state):
+        if key.startswith("camera_schedule_feedback_"):
+            st.session_state.pop(key, None)
+
+
+def _show_camera_schedule_feedback(ctx: CasterContext) -> None:
+    feedback_key = f"camera_schedule_feedback_{ctx.caster_key}"
+    feedback = st.session_state.get(feedback_key)
+    if not feedback:
+        return
+
+    level, message = feedback
+    if level == "success":
+        st.success(message)
+    else:
+        st.error(message)
+
+
+def _camera_profile_editor(ctx: CasterContext) -> None:
+    camera_cfg = ctx.cfg.camera_cfg
+    if camera_cfg is None or camera_cfg.type != "va_imaging":
+        st.info("Scheduled exposure, gain, and gamma controls are available for VA Imaging cameras.")
+        return
+
+    config_path = Path(ctx.cfg.camera_cfg_path)
+    try:
+        state = load_camera_control_state(config_path)
+    except Exception as exc:
+        st.error(f"Cannot load {config_path}: {exc}")
+        return
+
+    active_name, active_profile = active_camera_profile(state.profiles, datetime.now())
+    st.markdown(
+        f'<div class="section-title">Camera Schedule - {html.escape(ctx.caster_key)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Active profile: {active_name or 'none'}"
+        + (
+            f" ({active_profile.start}–{active_profile.end})"
+            if active_profile is not None
+            else ""
+        )
+        + " · Changes are applied by the background scheduler within about 2 seconds."
+    )
+    _show_camera_schedule_feedback(ctx)
+
+    try:
+        config_version = config_path.stat().st_mtime_ns
+    except OSError:
+        config_version = 0
+    editor_key = f"camera_profile_editor_{ctx.caster_key}_{config_version}"
+    auto_col_1, auto_col_2 = st.columns(2)
+    with auto_col_1:
+        auto_exposure = st.checkbox(
+            "Auto exposure",
+            value=state.auto_exposure,
+            key=f"camera_auto_exposure_{ctx.caster_key}_{config_version}",
+            on_change=_clear_camera_schedule_feedback,
+        )
+    with auto_col_2:
+        auto_gain = st.checkbox(
+            "Auto gain",
+            value=state.auto_gain,
+            key=f"camera_auto_gain_{ctx.caster_key}_{config_version}",
+            on_change=_clear_camera_schedule_feedback,
+        )
+
+    edited = st.data_editor(
+        pd.DataFrame(_camera_profile_rows(state)),
+        key=editor_key,
+        width="stretch",
+        hide_index=True,
+        num_rows="dynamic",
+        on_change=_clear_camera_schedule_feedback,
+        column_config={
+            "Profile": st.column_config.TextColumn("Profile", required=True),
+            "Start": st.column_config.TextColumn("Start", help="24-hour HH:MM", required=True),
+            "End": st.column_config.TextColumn("End", help="24-hour HH:MM", required=True),
+            "Exposure (µs)": st.column_config.NumberColumn(
+                "Exposure (µs)", min_value=1, step=1000, required=True
+            ),
+            "Gain (dB)": st.column_config.NumberColumn(
+                "Gain (dB)", min_value=0, step=1, required=True
+            ),
+            "Gamma enabled": st.column_config.CheckboxColumn("Gamma enabled"),
+            "Gamma": st.column_config.NumberColumn(
+                "Gamma", min_value=0.1, max_value=10.0, step=0.1, required=True
+            ),
+        },
+    )
+    st.caption(
+        "Use +/− row controls to add or remove profiles. The periods must cover all 24 hours "
+        "without gaps or overlaps; overnight periods such as 20:00–06:00 are supported."
+    )
+    submitted = st.button("Save camera schedule", type="primary")
+
+    if not submitted:
+        return
+    try:
+        profiles = _profiles_from_editor(edited)
+        saved = save_camera_control_state(
+            config_path,
+            CameraControlState(
+                auto_exposure=auto_exposure,
+                auto_gain=auto_gain,
+                profiles=profiles,
+            ),
+        )
+    except Exception as exc:
+        message = f"Camera schedule was not saved: {exc}"
+        st.session_state[f"camera_schedule_feedback_{ctx.caster_key}"] = ("error", message)
+        st.error(message)
+        return
+
+    message = (
+        f"Saved {len(saved.profiles)} profiles for {ctx.caster_key}. "
+        "The running camera scheduler will apply the active profile automatically."
+    )
+    st.session_state[f"camera_schedule_feedback_{ctx.caster_key}"] = ("success", message)
+    st.success(message)
+
+
 def _single_caster_view(
     ctx: CasterContext,
     active_window_s: int,
@@ -335,8 +505,8 @@ def _single_caster_view(
     metrics = aggregate_metrics([ctx])
     _single_metric_row(metrics, status)
 
-    tab_live, tab_pipes, tab_trolley, tab_logs, tab_config = st.tabs(
-        ["Live", "Recent Pipes", "Trolley Gate2", "Logs", "Configuration"]
+    tab_live, tab_pipes, tab_trolley, tab_logs, tab_camera, tab_config = st.tabs(
+        ["Live", "Recent Pipes", "Trolley Gate2", "Logs", "Camera Control", "Configuration"]
     )
 
     with tab_live:
@@ -355,6 +525,9 @@ def _single_caster_view(
         st.markdown(f'<div class="section-title">Logs - {html.escape(ctx.caster_key)}</div>', unsafe_allow_html=True)
         tail = read_log_tail(ctx)
         st.code(tail or "No log file found.", language="text")
+
+    with tab_camera:
+        _camera_profile_editor(ctx)
 
     with tab_config:
         camera_cfg = ctx.cfg.camera_cfg
@@ -450,17 +623,51 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Controls")
-        selected = st.selectbox("Caster", options, index=options.index(_initial_selection(options)))
-        refresh_ms = st.slider("Refresh interval", 1000, 10000, DEFAULT_REFRESH_MS, 1000)
-        active_window_s = st.slider("Active frame window", 10, 300, DEFAULT_ACTIVE_WINDOW_S, 5)
-        show_idle = st.checkbox("Show idle casters", value=False, disabled=selected != ALL_CASTERS)
+        selected = st.selectbox(
+            "Caster",
+            options,
+            index=options.index(_initial_selection(options)),
+            on_change=_clear_camera_schedule_feedback,
+        )
+        refresh_ms = st.slider(
+            "Refresh interval",
+            1000,
+            10000,
+            DEFAULT_REFRESH_MS,
+            1000,
+            on_change=_clear_camera_schedule_feedback,
+        )
+        active_window_s = st.slider(
+            "Active frame window",
+            10,
+            300,
+            DEFAULT_ACTIVE_WINDOW_S,
+            5,
+            on_change=_clear_camera_schedule_feedback,
+        )
+        show_idle = st.checkbox(
+            "Show idle casters",
+            value=False,
+            disabled=selected != ALL_CASTERS,
+            on_change=_clear_camera_schedule_feedback,
+        )
 
         selected_ctx = caster_by_key.get(selected)
         gate_options = ["geometry", "plc", "vision"]
         current_gate_source = _read_gate_source(selected_ctx) if selected_ctx else gate_options[0]
         gate_index = gate_options.index(current_gate_source) if current_gate_source in gate_options else 0
-        gate_source = st.selectbox("Gate source", gate_options, index=gate_index, disabled=selected_ctx is None)
-        if st.button("Apply gate source", disabled=selected_ctx is None):
+        gate_source = st.selectbox(
+            "Gate source",
+            gate_options,
+            index=gate_index,
+            disabled=selected_ctx is None,
+            on_change=_clear_camera_schedule_feedback,
+        )
+        if st.button(
+            "Apply gate source",
+            disabled=selected_ctx is None,
+            on_click=_clear_camera_schedule_feedback,
+        ):
             _write_gate_source(selected_ctx, gate_source)
             st.success(f"{selected_ctx.caster_key} gate source set to {gate_source}")
 

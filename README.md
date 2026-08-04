@@ -282,6 +282,16 @@ var/caster_<id>/latest.jpg
 var/caster_<id>/pipe_detect.log
 ```
 
+For a selected VA Imaging caster, open the `Camera Control` tab to manage its
+scheduled exposure, gain, gamma, auto-exposure, and auto-gain settings. New
+casters start with day/night defaults. Use the table's row controls to add or
+remove any number of custom periods, including overnight periods such as
+`20:00`–`06:00`. The schedule must cover all 24 hours without gaps or overlaps.
+
+Saving updates only that caster's `camera.yaml`. Its independent background
+camera scheduler notices the atomic file change within about two seconds and
+applies the active profile; the inference loop does not poll configuration.
+
 ## Camera Configuration
 
 Set the camera source in the caster runtime file:
