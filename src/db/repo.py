@@ -49,9 +49,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS gate_cycles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   t_gate1_open REAL,
-  t_gate1_close REAL,
   t_gate2_open REAL,
-  t_gate2_close REAL,
   created_at REAL DEFAULT (strftime('%s','now'))
 );
 
@@ -310,47 +308,36 @@ class SqliteRepo:
     return row[0] if row else default
   
   def gate_open(self, gate, ts):
+    if gate not in ("gate1", "gate2"):
+      raise ValueError(f"Unsupported gate name: {gate!r}")
+
     self.conn.execute(
       "INSERT INTO gate_openings(gate_name,t_open) VALUES(?,?)",
       (gate, ts),
     )
 
-    col = "t_gate1_open" if gate == "gate1" else "t_gate2_open"
+    if gate == "gate1":
+      # Gate 1 starts a new opening-only cycle.
+      self.conn.execute("INSERT INTO gate_cycles (t_gate1_open) VALUES (?)", (ts,))
+      return
 
-    sql = f"""
-    UPDATE gate_cycles
-    SET {col} = ?
-    WHERE id = (
+    # Gate 2 completes the newest cycle started by gate 1. If startup occurs
+    # mid-cycle, preserve the gate 2 opening as its own row instead of losing it.
+    cur = self.conn.execute(
+      """
+      UPDATE gate_cycles
+      SET t_gate2_open = ?
+      WHERE id = (
         SELECT id FROM gate_cycles
-        WHERE t_gate1_close IS NULL
-          OR t_gate2_close IS NULL
+        WHERE t_gate1_open IS NOT NULL AND t_gate2_open IS NULL
         ORDER BY id DESC
         LIMIT 1
+      )
+      """,
+      (ts,),
     )
-    """
-
-    cur = self.conn.execute(sql, (ts,))
-
     if cur.rowcount == 0:
-        sql = f"INSERT INTO gate_cycles ({col}) VALUES (?)"
-        self.conn.execute(sql, (ts,))
-
-  def gate_close(self, gate, ts):
-
-    col = "t_gate1_close" if gate == "gate1" else "t_gate2_close"
-
-    sql = f"""
-    UPDATE gate_cycles
-    SET {col} = ?
-    WHERE id = (
-        SELECT id FROM gate_cycles
-        WHERE {col} IS NULL
-        ORDER BY id DESC
-        LIMIT 1
-    )
-    """
-
-    self.conn.execute(sql, (ts,))
+      self.conn.execute("INSERT INTO gate_cycles (t_gate2_open) VALUES (?)", (ts,))
 
 
 

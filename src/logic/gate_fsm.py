@@ -1,4 +1,4 @@
-# gate open/close debounced transitions
+# Debounced gate opening transitions. Closed state is tracked only to re-arm.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -7,7 +7,7 @@ import numpy as np
 import logging
 
 from logic.datatypes import GateStatus
-from logic.events import GateOpenedEvent, GateClosedEvent
+from logic.events import GateOpenedEvent
 from logic.gate_sources import GateStatusSource
 from vision.types import TrackDet
 from plc.client import PLCClient
@@ -74,10 +74,5 @@ class GateFSM:
           events.append(GateOpenedEvent(gate_name=gate_name, t_open=now))
           logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
 
-      # Emit closed event
-      if gs.position == "closed" and gs.stable == self.stable_frames:
-          events.append(GateClosedEvent(gate_name=gate_name, t_closed=now))
-          logger.info("Gate closed (debounced) | gate=%s | ts=%.3f", gate_name, now)
-        
       self.gates[gate_name] = gs
     return events, metrics_by_gate

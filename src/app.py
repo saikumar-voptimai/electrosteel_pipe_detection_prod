@@ -30,7 +30,7 @@ from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
 from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
 from logic.trolley_gate2_monitor import TrolleyGate2Monitor
-from logic.events import GateClosedEvent, GateOpenedEvent
+from logic.events import GateOpenedEvent
 from logic.weight_service import WeightService
 from utils.logging import setup_logging
 from utils.runtime import prepare_analysis_frame, resize_for_inference
@@ -240,9 +240,6 @@ class App:
         for event in gate_events:
             if isinstance(event, GateOpenedEvent):
                 repo.gate_open(event.gate_name, event.t_open)
-
-            elif isinstance(event, GateClosedEvent):
-                repo.gate_close(event.gate_name, event.t_closed)
 
 
         # Update pipe FSM (full logic)
