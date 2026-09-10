@@ -1,0 +1,77 @@
+# fps, conf thresholds, debounce frames, logging
+video_source: gige
+model_path: models/yolo/yolo11n_26_23_01.engine
+tracker_yaml: "config/casters/caster_2/bytetrack.yaml"
+
+debug_mode: false
+
+imgsz: 640 # Inference
+# Image mode for YOLO/ByteTrack analysis: rgb | grey_scale
+# Aliases such as color/bgr and bw/gray/grey/grayscale are accepted.
+analysis_image_mode: rgb
+conf: 0.25
+iou: 0.5
+device: auto                       # auto = CUDA/TensorRT on Jetson when available, else CPU
+half: true                         # FP16 for CUDA .pt inference; TensorRT precision is baked into .engine
+
+max_fps: 30
+frame_skip: 0                       # 0 = process every frame, 1 = every alternate, etc.
+
+# Throttle non-inference logic (FSM updates, DB upserts, event handling).
+# 0 = run every inference frame. Example: 6 means update pipe/gate logic at 6Hz
+# while still running inference/tracking each processed frame.
+update_fps: 6
+
+log_level: "INFO"                   # DEBUG|INFO|WARNING|ERROR
+log_path: "var/caster_2/pipe_detect.log"
+
+db_path: "var/caster_2/caster_2_pipes.db"
+latest_jpg_path: "var/caster_2/latest.jpg"
+publish_fps: 3                      # UI refresh source
+publish_imgsz: [1310, 608]              # max width/height of published image (maintain aspect ratio; can be int or [w, h])
+publish_overlay: false               # draw detection/tracking overlay on published image
+history:
+  enabled: true
+  base_dir: var/caster_2/history
+  date_folder_format: "%Y_%m_%d"
+  prefix: pipe
+  time_filename_format: "%d-%m-%Y-%H-%M-%S-%f"
+  ext: jpeg
+  timezone: Asia/Kolkata
+  shifts:
+    - name: Shift_A
+      start: "06:00"
+      end: "14:00"
+    - name: Shift_B
+      start: "14:00"
+      end: "22:00"
+    - name: Shift_C
+      start: "22:00"
+      end: "06:00"
+
+
+db_flush_interval_s: 5.0            # batch DB commits for Pi
+run_headless: true                 # disable display window
+
+origin_confirm_frames: 5
+remove_pipe_id_pipe_checkpoint_not_entered: false   # true = before new UID, delete previous UID only if no loadcell entry and no pipe checkpoint
+loadcell_enter_confirm_frames: 1    # you said first entry; 2 is safer
+loadcell_exit_confirm_frames: 1
+stale_track_frames: 45
+rearm_empty_frames: 3
+min_pipe_gap_seconds: 5        # merge re-detected pipes from same origin within this window
+loadcell_covered_per: 50       # % of loadcell length covered to confirm pipe presence
+class_name_to_id:
+  pipe: 0
+  trolley: 1
+  gate1: 2
+  gate2: 3
+  human: 4
+
+gate:
+  source_default: "geometry"        # plc | geometry | vision
+  stable_frames: 3
+  min_conf: 0.25
+  max_area_ratio_vs_closed: 0.85
+  max_w_over_h: 0.90
+  human_iou_occlusion: 0.10

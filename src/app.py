@@ -5,19 +5,22 @@ from __future__ import annotations
 import os
 import time
 import logging
+import argparse
 import cv2
-
+import numpy as np
 from dataclasses import dataclass
+from pathlib import Path
 
 from plc.client import PLCClient
 from vision.types import BBox, TrackDet
-from utils.config import AppCfg
+from utils.config import AppCfg, load_caster_config, load_caster_file_config, resolve_caster_id
 from utils.timing import RateLimiter
+from utils.roi_names import REQUIRED_ROIS, as_keys
+from utils.roi_redraw import run_roi_redraw
 
 from camera.capture import Capture
 from geometry.roi import ROIManager
 
-from vision.tracker import YoloByteTrack
 from vision.overlay import LatestFramePublisher, draw_overlay
 
 from db.repo import SqliteRepo
@@ -25,22 +28,18 @@ from plc.factory import create_plc
 
 from logic.pipe_fsm import PipeFlowFSM
 from logic.gate_fsm import GateFSM
-from logic.gate_sources import GateStatusSource, GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.gate_sources import GeometryGateSource, PLCGateSource, VisionGateSource
+from logic.trolley_gate2_monitor import TrolleyGate2Monitor
+from logic.events import GateOpenedEvent
+from logic.weight_service import WeightService
 from utils.logging import setup_logging
-from utils.runtime import resize_for_inference
+from utils.runtime import prepare_analysis_frame, resize_for_inference
+from ui.formatting import fmt_ts
+from utils.camera_profiles import default_camera_profiles
+from utils.camera_scheduler import CameraProfileScheduler
 
 logger = logging.getLogger("pipe_detect")
 
-#TODO: Use enums or constants for ROI names
-REQUIRED_ROIS = [
-    "roi_loadcell",
-    "roi_caster5_origin",
-    "roi_left_origin",
-    "roi_right_origin",
-    "roi_safety_critical",
-    "roi_gate1_open", "roi_gate2_open",
-    "roi_gate1_closed", "roi_gate2_closed",
-]
 
 
 @dataclass
@@ -52,9 +51,13 @@ class App:
     """
     setup_logging(level=self.cfg.runtime.log_level, log_path=self.cfg.runtime.log_path)
     logger.info(
-      "Starting app | source=%s | model=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s",
+      "Starting app | caster=%s | source=%s | model=%s | analysis_image_mode=%s | device=%s | half=%s | db=%s | latest_jpg=%s | max_fps=%s | frame_skip=%s | publish_fps=%s | publish_imgsz=%s | headless=%s | pid=%d",
+      self.cfg.caster_id,
       self.cfg.runtime.video_source,
       self.cfg.runtime.model_path,
+      self.cfg.runtime.analysis_image_mode,
+      self.cfg.runtime.device,
+      self.cfg.runtime.half,
       self.cfg.runtime.db_path,
       self.cfg.runtime.latest_jpg_path,
       self.cfg.runtime.max_fps,
@@ -62,22 +65,41 @@ class App:
       self.cfg.runtime.publish_fps,
       self.cfg.runtime.publish_imgsz,
       self.cfg.runtime.run_headless,
+      os.getpid(),
     )
 
     # Validate ROIs
-    for name in REQUIRED_ROIS:
-      if name not in self.cfg.rois:
-        raise RuntimeError(f"Missing required ROI: {name} in config/rois.yaml. Run --redraw to define ROIs.")
-    
+    for name in as_keys(REQUIRED_ROIS):
+        if name not in self.cfg.rois:
+            raise RuntimeError(
+                f"Missing required ROI: {name} in {self.cfg.rois_path}. Run --redraw to define ROIs."
+            )
     os.makedirs(os.path.dirname(self.cfg.runtime.db_path), exist_ok=True)
     os.makedirs(os.path.dirname(self.cfg.runtime.latest_jpg_path), exist_ok=True)
 
     repo = SqliteRepo(self.cfg.runtime.db_path)
     plc = create_plc(self.cfg.plc)
 
+    weight_service: WeightService | None = None
+    if getattr(self.cfg, "weight", None) is not None and self.cfg.weight.enabled:
+      weight_service = WeightService(self.cfg.weight, max_duration_s=30.0)
+      logger.info("Weight capture enabled | machine_default=%s", self.cfg.weight.machine_id_default)
+
     rois = ROIManager(self.cfg.rois)
     capture = Capture(source=self.cfg.runtime.video_source, camera_cfg=self.cfg.camera_cfg)
     capture.open()
+    # Start camera profile scheduler. 
+    scheduler = None
+
+    if self.cfg.camera_cfg and capture._is_gige():
+        scheduler = CameraProfileScheduler(
+            capture,
+            self.cfg.camera_cfg.profiles or default_camera_profiles(),
+            config_path=self.cfg.camera_cfg_path,
+        )
+        scheduler.start()
+
+    from vision.tracker import YoloByteTrack
 
     tracker = YoloByteTrack(
         model_path=self.cfg.runtime.model_path,
@@ -85,19 +107,25 @@ class App:
         conf=self.cfg.runtime.conf,
         iou=self.cfg.runtime.iou,
         imgsz=self.cfg.runtime.imgsz,
+        device=self.cfg.runtime.device,
+        half=self.cfg.runtime.half,
     )
 
     # Pipe Flow FSM
+    pulse_tag = self._resolve_caster_pulse_tag()
     pipe_fsm = PipeFlowFSM(
       rois=rois,
       plc=plc,
-      pulse_tag=self.cfg.plc.tags["caster_5_new"],
+      pulse_tag=pulse_tag,
       pulse_ms=self.cfg.plc.pulse_ms,
       origin_confirm_frames=self.cfg.runtime.origin_confirm_frames,
       loadcell_enter_confirm_frames=self.cfg.runtime.loadcell_enter_confirm_frames,
       loadcell_exit_confirm_frames=self.cfg.runtime.loadcell_exit_confirm_frames,
       stale_track_frames=self.cfg.runtime.stale_track_frames,
       rearm_empty_frames=self.cfg.runtime.rearm_empty_frames,
+      min_pipe_gap_seconds=self.cfg.runtime.min_pipe_gap_seconds,
+      loadcell_covered_per=self.cfg.runtime.loadcell_covered_per,
+      remove_pipe_id_pipe_checkpoint_not_entered=self.cfg.runtime.remove_pipe_id_pipe_checkpoint_not_entered,
     )
 
     # Gate source switching via DB setting
@@ -106,29 +134,60 @@ class App:
     gate_source = repo.get_setting("gate_source", default_gate_source)
 
     gate_fsm = self._build_gate_fsm(gate_source, rois, plc)
+    trolley_gate2_monitor = TrolleyGate2Monitor(
+      rois=rois,
+      stale_track_frames=self.cfg.runtime.stale_track_frames,
+    )
 
     publisher = LatestFramePublisher(
       out_path=self.cfg.runtime.latest_jpg_path,
       fps=self.cfg.runtime.publish_fps,
+      history_cfg=self.cfg.runtime.history,
+      class_name_to_id=self.cfg.runtime.class_name_to_id,
     )
 
     limiter = RateLimiter(self.cfg.runtime.max_fps)
 
+    # Independent throttles for non-inference logic and visualization.
+    update_fps = int(getattr(self.cfg.runtime, "update_fps", 0) or 0)
+    last_update_ts = 0.0
+    last_viz_ts = 0.0
+
     last_commit = time.time()
     last_setting_poll = time.time() 
+    fps_log_interval_s = 5.0
+    last_fps_log = time.time()
+    fps_log_frames = 0
 
     frame_idx = 0
 
+    window_name = "Pipe Detection = Live"
+    if not self.cfg.runtime.run_headless:
+      # Allow resizing the window on larger displays.
+      cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    runfps = 1.0
     try:
       while True:
+        iter_time = time.time()
+        now = iter_time
         item = capture.read()
         if item is None:
           logger.warning("No frame captured, retrying...")
           continue
+        st1 = time.time()
         frame_orig, ts = item
-        orig_h, orig_w = frame_orig.shape[:2]
+        # We get the original frame (and size) as recorded by the source camera
+        orig_h, orig_w = frame_orig.shape[:2]       # Ex: VA - Imaging --> (w2620, h1216)
 
-        frame_scaled = resize_for_inference(frame_orig, target_width=self.cfg.runtime.imgsz)
+        frame_scaled = prepare_analysis_frame(
+          frame_orig,
+          target_width=self.cfg.runtime.imgsz,
+          mode=self.cfg.runtime.analysis_image_mode,
+        )
+        # imgsz - w960. scaled frame size: (w960, h445)
+        # NOTE: This is the frame passed to the ml model for inference.
+        # TODO: FPS of the source is 18.0 fps. We can force it along with the inference and rendering fps.
         scaled_h, scaled_w = frame_scaled.shape[:2]
 
         # Coordinate mapping:
@@ -137,25 +196,26 @@ class App:
         # - tracker.infer() returns bboxes in SCALED coordinates
         # Therefore, to map detections back to original coords, multiply by (orig/scaled).
         # For drawing ROIs on the scaled frame, multiply ROI points by (scaled/orig).
-        scale_x = scaled_w / orig_w
-        scale_y = scaled_h / orig_h
-        inv_scale_x = orig_w / scaled_w
-        inv_scale_y = orig_h / scaled_h
+        inv_scale_x = orig_w / scaled_w     # Ex: 2620 / 960 = 2.729
+        inv_scale_y = orig_h / scaled_h     # Ex: 1216 / 445 = 2.732
 
         logger.debug("Frame captured | idx=%d | ts=%.3f | shape=%s", frame_idx, ts, getattr(frame_scaled, "shape", None))
-
+        st2 = time.time()
         # Skip frames if configured
         if self.cfg.runtime.frame_skip > 0 and (frame_idx % (self.cfg.runtime.frame_skip + 1) != 0):
           frame_idx += 1
           continue
 
-        dets = tracker.infer(frame_scaled)
+        dets = tracker.infer(frame_scaled) # Inference running on scaled frame (w960, h445)
+        st3 = time.time()
+        # It doesnt matter to yolo what the other dimension. Since it can detect the presence of objects
+        # and reports in absolutre pixel coordinates of the scaled frame.
         dets_orig = []
         for d in dets:
           if d.track_id is None:
               continue
-
-          x1 = d.bbox.x1 * inv_scale_x
+          # Original dets will be larger than inference coords. Hence multiplied by scale factors > 1.
+          x1 = d.bbox.x1 * inv_scale_x # Now we will map the dets to original frame coords.
           y1 = d.bbox.y1 * inv_scale_y
           x2 = d.bbox.x2 * inv_scale_x
           y2 = d.bbox.y2 * inv_scale_y
@@ -170,26 +230,87 @@ class App:
           )
         logger.debug("Inference results | idx=%d | dets=%d", frame_idx, len(dets))
 
+        gate_metrics = {}
+        updated_pipes = []
+        pipe_events = []
+
+        st = time.time()
         # Update gate FSM
-        gate_events = gate_fsm.update(frame=frame_orig, dets=dets_orig)
+        gate_events, gate_metrics = gate_fsm.update(frame=frame_orig, dets=dets_orig)
         for event in gate_events:
-          logger.info(f"Gate opened: {event.gate_name} at {event.t_open}")
-          repo.insert_event("gate_open", None, f"{event.gate_name}@{event.t_open:.3f}")
-        
-        # Update pipe FSM
+            if isinstance(event, GateOpenedEvent):
+                repo.gate_open(event.gate_name, event.t_open)
+
+
+        # Update pipe FSM (full logic)
         updated_pipes, pipe_events = pipe_fsm.update(frame_idx=frame_idx, ts=ts, dets=dets_orig)
         logger.debug("Pipe FSM updated | idx=%d | updated=%d | events=%d", frame_idx, len(updated_pipes), len(pipe_events))
+
+        trolley_gate2_events = trolley_gate2_monitor.update(frame_idx=frame_idx, timestamp=ts, dets=dets_orig)
+        for event in trolley_gate2_events:
+          repo.insert_trolley_gate2_intersection(
+            timestamp=event.timestamp,
+            trolley_track_id=event.trolley_track_id,
+            pipe_on_trolley=event.pipe_on_trolley,
+          )
 
         # Handle pipe events + optional extra PLC tag for debugging
         for event in pipe_events:
           logger.info(f"Pipe event: {event}")
           if event.__class__.__name__ == "PipeEnteredLoadcellEvent":
-            repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            if event.pipe_uid:
+              repo.insert_event("pipe_enter_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            else:
+              repo.insert_unknown_loadcell_event(
+                "pipe_enter_loadcell",
+                event.tracker_id,
+                "missing_pipe_uid",
+                ts=event.t_enter,
+              )
             if "pipe_on_loadcell" in self.cfg.plc.tags:
               plc.pulse(self.cfg.plc.tags["pipe_on_loadcell"], self.cfg.plc.pulse_ms)
-          
+
+            if event.pipe_uid and weight_service is not None:
+              ok = weight_service.start(pipe_uid=event.pipe_uid, machine_id=self.cfg.weight.machine_id_default)
+              if ok:
+                repo.insert_event("weight_capture_start", event.pipe_uid, f"machine_id={self.cfg.weight.machine_id_default}")
+
           if event.__class__.__name__ == "PipeExitedLoadcellEvent":
-            repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            if event.pipe_uid:
+              repo.insert_event("pipe_exit_loadcell", event.pipe_uid, f"tid={event.tracker_id}")
+            else:
+              repo.insert_unknown_loadcell_event(
+                "pipe_exit_loadcell",
+                event.tracker_id,
+                "missing_pipe_uid",
+                ts=event.t_exit,
+              )
+
+            if weight_service is not None:
+              weight_service.stop()
+          if event.__class__.__name__ == "PipeRemovedBeforeCheckpointEvent":
+            repo.delete_pipe(event.pipe_uid)
+            repo.insert_event("pipe_deleted", event.pipe_uid, event.reason)
+        freq = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
+        logger.debug("Non-inference logic update complete | freq=%.2f Hz", freq)
+
+        # Persist any finalized weights (done in background thread)
+        if weight_service is not None:
+          for fin in weight_service.drain_results():
+            w = fin.result.weight
+            quality = fin.result.quality
+            samples = fin.result.samples
+            repo.upsert_pipe({
+              "pipe_uid": fin.pipe_uid,
+              "weight": w,
+              "weight_quality": quality,
+              "weight_samples": samples,
+            })
+            repo.insert_event(
+              "weight_captured",
+              fin.pipe_uid,
+              f"weight={w} quality={quality} samples={samples} reason={fin.reason}",
+            )
         
         # Upsert updated pipes
         for p in updated_pipes:
@@ -199,6 +320,7 @@ class App:
             "pipe_uid": p.pipe_uid,
             "tracker_id": p.tracker_id,
             "origin": p.origin,
+            "pipe_checkpoint": 1 if p.pipe_checkpoint else 0,
             "state": p.state,
             "t_origin": p.t_origin,
             "t_loadcell_enter": p.t_loadcell_enter,
@@ -211,17 +333,73 @@ class App:
             "last_seen_ts": p.last_seen_ts,
             "reached_gate_zone": 1 if int(p.reached_gate_zone) else 0,
           })
-        
-        # Draw and publish latest frame
-        vis = draw_overlay(frame_scaled.copy(), rois, dets, ts, scale_x=scale_x, scale_y=scale_y)
-        if not self.cfg.runtime.run_headless:
-          cv2.imshow("Pipe Detection = Live", vis)
-          key = cv2.waitKey(1) & 0xFF
-          if key == 27:   # ESC key
-            logger.info("Quit signal received, shutting down...")
-            break
-        publisher.publish(vis)
-        
+        st4 = time.time()
+        # Visualization and publishing are throttled by publish_fps.
+        do_viz = (int(self.cfg.runtime.publish_fps) > 0) and ((now - last_viz_ts) >= (1.0 / float(self.cfg.runtime.publish_fps)))
+        if do_viz:
+          st = time.time()
+          last_viz_ts = now
+
+          # Draw and publish latest frame (visualization sizing is separate from inference sizing)
+          vis_base = frame_orig # w2620, h1216
+          pub_size = self.cfg.runtime.publish_imgsz
+
+          if isinstance(pub_size, int) and pub_size > 0:
+              vis_base = resize_for_inference(
+                  frame_orig,
+                  target_width=pub_size
+              )
+
+          elif isinstance(pub_size, tuple) and len(pub_size) == 2:
+              target_w, target_h = pub_size
+              vis_base = cv2.resize(frame_orig, (target_w, target_h))
+          vis_h, vis_w = vis_base.shape[:2]
+          vis_scale_x = vis_w / float(orig_w) # e.g. 1920 / 2620 = 0.732
+          vis_scale_y = vis_h / float(orig_h) # e.g. 888 / 1216 = 0.730
+
+          # Original dets will be smaller in vis coords. Hence multiplied by scale factors < 1.
+          dets_vis = [
+            TrackDet(
+              cls_name=d.cls_name,
+              conf=d.conf,
+              track_id=d.track_id,
+              bbox=BBox(
+                d.bbox.x1 * vis_scale_x,
+                d.bbox.y1 * vis_scale_y,
+                d.bbox.x2 * vis_scale_x,
+                d.bbox.y2 * vis_scale_y,
+              ),
+            )
+            for d in dets_orig
+          ]
+
+          vis = draw_overlay(
+            vis_base,
+            rois,
+            dets_vis,
+            ts,
+            scale_x=vis_scale_x,
+            scale_y=vis_scale_y,
+            gate_metrics=gate_metrics,
+            debug=self.cfg.runtime.debug_mode,
+            runfps=runfps,
+          )
+
+          if not self.cfg.runtime.run_headless:
+            cv2.imshow(window_name, vis)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:   # ESC key
+              logger.info("Quit signal received, shutting down...")
+              break
+          
+          fps = 1 / (time.time() - st) if (time.time() - st) > 0 else 0.0
+          logger.debug("Visualization complete | freq=%.2f Hz", fps)
+          publish_overlay = bool(self.cfg.runtime.publish_overlay)
+          if publish_overlay:
+              publisher.publish(vis)        # overlay image
+          else:
+              publisher.publish(vis_base, dets=dets_vis, ts=ts, gate_metrics=gate_metrics)   # raw image + txt metadata
+        st5 = time.time()
         # Commit DB periodically
         if time.time() - last_commit >= self.cfg.runtime.db_flush_interval_s:
           logger.debug("DB commit | interval_s=%.3f", self.cfg.runtime.db_flush_interval_s)
@@ -229,7 +407,7 @@ class App:
           last_commit = time.time()
 
         # Poll settings for gate source change
-        if time.time() - last_setting_poll >= 2.0:
+        if time.time() - last_setting_poll >= 200.0:
           new_source = repo.get_setting("gate_source", default_gate_source)
           if new_source != gate_source:
             logger.info(f"Gate source changed from {gate_source} to {new_source}, updating FSM.")
@@ -238,9 +416,33 @@ class App:
             repo.insert_event("setting_changed", None, f"gate_source={gate_source}")
             repo.commit()
           last_setting_poll = time.time()
-
+        
         limiter.sleep_if_needed()
         frame_idx += 1
+        iter_duration = time.time() - iter_time
+        runfps = 1.0 / iter_duration if iter_duration > 0 else 0.0
+        if self.cfg.runtime.debug_mode:
+          fps_log_frames += 1
+          fps_log_elapsed = time.time() - last_fps_log
+          if fps_log_elapsed >= fps_log_interval_s:
+            avg_fps = fps_log_frames / fps_log_elapsed if fps_log_elapsed > 0 else 0.0
+            logger.info(
+              "Runtime FPS | current=%.2f | avg_%.0fs=%.2f | frame_idx=%d | inference_ms=%.1f | loop_ms=%.1f",
+              runfps,
+              fps_log_interval_s,
+              avg_fps,
+              frame_idx,
+              (st3 - st2) * 1000.0,
+              iter_duration * 1000.0,
+            )
+            last_fps_log = time.time()
+            fps_log_frames = 0
+        logger.debug("Frame processed | idx=%d | iter_duration=%.3f s | runfps=%.2f", frame_idx, iter_duration, runfps)
+
+        st6 = time.time()
+        logger.debug("time for full loop: %.3f s", st6 - st1)
+        logger.debug("-----------------------------------------------------")
+        logger.debug("Fraction times | read+scale=%.3f | inference=%.3f | logic=%.3f | render=%.3f | overhead=%.3f", st2 - st1, st3 - st2, st4 - st3, st5 - st4, st6 - st5)
     except KeyboardInterrupt:
       logger.info("Shutting down application...")
     finally:
@@ -250,12 +452,21 @@ class App:
       except Exception:
         pass
       try:
+        if scheduler:
+          scheduler.stop()
+      except Exception:
+        pass
+      try:
+        if weight_service is not None:
+          weight_service.stop()
+      except Exception:
+        pass
+      try:
         plc.close()
       except Exception:
         pass
       try:
         capture.close()
-        capture._cap.release()
       except Exception:
         pass
       cv2.destroyAllWindows()
@@ -295,5 +506,111 @@ class App:
         "gate1": self.cfg.plc.tags.get("gate1_open", ""),
         "gate2": self.cfg.plc.tags.get("gate2_open", ""),
       },
-      plc_signal_on_open=True,
+      plc_signal_on_open=False,
     )
+
+  def _resolve_caster_pulse_tag(self) -> str:
+    preferred = f"{self.cfg.caster_key}_new"
+    fallback = "caster_new"
+    tags = self.cfg.plc.tags
+
+    if preferred in tags:
+      tag = tags[preferred]
+      logger.info("Using caster pulse tag | caster=%s | key=%s | tag=%s", self.cfg.caster_id, preferred, tag)
+      self._validate_real_plc_tag(tag)
+      return tag
+    if fallback in tags:
+      tag = tags[fallback]
+      logger.warning("Missing %s; using fallback %s=%s", preferred, fallback, tag)
+      self._validate_real_plc_tag(tag)
+      return tag
+
+    message = (
+      f"Missing PLC pulse tag for caster {self.cfg.caster_id}. "
+      f"Expected '{preferred}' or fallback '{fallback}' in PLC tags."
+    )
+    if self.cfg.plc.mode.lower() == "mock":
+      logger.warning("%s Using synthetic mock tag %s.", message, preferred)
+      return preferred
+    raise RuntimeError(message)
+
+  def _validate_real_plc_tag(self, tag: str) -> None:
+    mode = self.cfg.plc.mode.lower()
+    if mode != "modbus":
+      return
+    coils = dict(((self.cfg.plc.modbus or {}).get("coils", {}) or {}))
+    if tag not in coils:
+      raise RuntimeError(
+        f"PLC tag '{tag}' is configured for caster {self.cfg.caster_id}, "
+        "but it is missing from plc.modbus.coils."
+      )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+  def caster_id_arg(raw: str) -> int:
+    try:
+      return resolve_caster_id(raw)
+    except ValueError as exc:
+      raise argparse.ArgumentTypeError(str(exc)) from exc
+
+  parser = argparse.ArgumentParser(description="Pipe detection app")
+  parser.add_argument("--caster", type=caster_id_arg, default=1, help="Caster id to run, e.g. 1 or caster_1.")
+  parser.add_argument("--caster-config", default=None, help="Path to caster config directory or legacy caster YAML.")
+  parser.add_argument("--redraw", action="store_true", help="Launch ROI redraw wizard for this caster.")
+  parser.add_argument("--video-source", default=None, help="Override video source for redraw/testing.")
+  parser.add_argument("--model-path", default=None, help="Override runtime model path, e.g. a .pt model for CPU backup.")
+  parser.add_argument("--device", default=None, help="Override inference device: auto, cpu, cuda, cuda:0, or a CUDA id.")
+  parser.add_argument("--cpu", action="store_true", help="Force CPU inference and disable half precision.")
+  parser.add_argument("--half", dest="half", action="store_true", default=None, help="Enable half precision when supported.")
+  parser.add_argument("--no-half", dest="half", action="store_false", help="Disable half precision.")
+  return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+  args = parse_args(argv)
+
+  if args.redraw:
+    caster_file = load_caster_file_config(args.caster, args.caster_config)
+    video_source = args.video_source
+    if video_source is None:
+      import yaml
+      runtime_raw = {}
+      runtime_path = Path(caster_file.runtime)
+      if runtime_path.exists():
+        runtime_raw = yaml.safe_load(runtime_path.read_text(encoding="utf-8")) or {}
+      runtime_raw.update(caster_file.overrides)
+      video_source = runtime_raw.get("video_source", 0)
+
+    run_roi_redraw(
+      video_source=video_source,
+      rois_path=caster_file.rois,
+      camera_cfg_path=caster_file.camera,
+    )
+    print(f"[OK] Saved caster {caster_file.caster_id} ROIs to {caster_file.rois}")
+    return
+
+  caster_file = load_caster_file_config(args.caster, args.caster_config)
+  if not Path(caster_file.rois).exists():
+    raise SystemExit(f"Missing {caster_file.rois}. Run with --caster {caster_file.caster_id} --redraw to create ROIs.")
+  runtime_overrides = {}
+  if args.video_source is not None:
+    runtime_overrides["video_source"] = args.video_source
+  if args.model_path is not None:
+    runtime_overrides["model_path"] = args.model_path
+  if args.device is not None:
+    runtime_overrides["device"] = args.device
+  if args.half is not None:
+    runtime_overrides["half"] = args.half
+  if args.cpu:
+    runtime_overrides["device"] = "cpu"
+    runtime_overrides["half"] = False
+
+  cfg = load_caster_config(args.caster, args.caster_config, runtime_overrides=runtime_overrides)
+
+  if not cfg.runtime.run_headless:
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+  App(cfg).run()
+
+
+if __name__ == "__main__":
+  main()

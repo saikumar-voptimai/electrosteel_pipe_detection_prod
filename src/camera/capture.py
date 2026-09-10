@@ -1,125 +1,97 @@
 from __future__ import annotations
-import time
-from dataclasses import dataclass
-from dataclasses import field
-import cv2
-import numpy as np
-from typing import Tuple
+
 import logging
-import subprocess
-from utils.config import CameraCfg
+import time
+from dataclasses import dataclass, field
+
+from camera.clients import CameraClient
+from camera.factory import create_camera_client, resolve_camera_type
+from utils.config import CameraCfg, CameraProfileCfg
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class Capture:
-  source: int | str
-  camera_cfg: CameraCfg | None = None
-  reconnect_sleep_s: float = 1.0
-  warmup_frames: int = 10
+    source: int | str
+    camera_cfg: CameraCfg | None = None
+    warmup_frames: int = 10
+    max_retries: int = 5
+    reconnect_sleep_s: float = 1.0
+    empty_read_reconnect_threshold: int = 5
+    _client: CameraClient | None = field(default=None, init=False)
+    _empty_reads: int = field(default=0, init=False)
 
-  _cap: cv2.VideoCapture | None = field(default=None, init=False)
+    def _is_gige(self) -> bool:
+        return resolve_camera_type(self.camera_cfg, self.source) == "va_imaging"
 
-  def open(self) -> None:
-    """
-    Opens the video capture source.
-    """
-    if isinstance(self.source, str) and self.source.startswith("gige"):
-      logger.info("Opening GigE camera via GStreamer Aravis: %s", self.source)
-
-      if self.camera_cfg is None:
-        raise RuntimeError(
-          "video_source is 'gige' but no camera_cfg was provided. "
-          "Check config/camera.yaml and main.py --camera argument."
+    def open(self) -> None:
+        self._client = create_camera_client(
+            source=self.source,
+            camera_cfg=self.camera_cfg,
+            warmup_frames=self.warmup_frames,
         )
+        self._client.open()
 
-      # Release existing camera uses if any with pkill
-      # Note: these tools are typically available on Linux; make this best-effort.
-      try:
-        subprocess.run(["pkill", "-f", "arv-viewer"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-        subprocess.run(["pkill", "-f", "arv-test"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-        subprocess.run(["pkill", "-f", "gst-launch-1.0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
-      except FileNotFoundError:
-        logger.debug("Process cleanup tools not found; skipping pkill")
+    def read(self):
+        if self._client is None:
+            self.open()
 
-      # List cameras and see "Daheng" exists in the output. Also log.
-      try:
-        output = subprocess.run(
-          ["arv-tool-0.10", "list"],
-          capture_output=True,
-          text=True,
-        )
-        if "daheng" in (output.stdout or "").lower():
-          logger.info("Daheng camera detected:\n%s", output.stdout)
-      except FileNotFoundError:
-        logger.debug("arv-tool-0.10 not found; skipping camera list")
-      
-      pipeline = (
-          f"aravissrc ! "
-          "bayer2rgb ! "
-          "videoconvert ! "
-          f"video/x-raw,width={self.camera_cfg.width},height={self.camera_cfg.height},framerate={self.camera_cfg.fps}/1,format=BGR ! "
-          "appsink drop=true max-buffers=1 sync=false"
-      )
+        try:
+            item = self._client.read()
+            if item is not None:
+                self._empty_reads = 0
+                return item
+        except Exception as exc:
+            logger.warning("Camera read failed: %s", exc)
 
-      self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-      if not self._cap.isOpened():
-        raise RuntimeError(
-          f"Cannot open GigE camera via GStreamer: {self.source}"
-          "Check: gst-inspect-1.0 aravissrc, GST_PLUGIN_PATH, and camera connectivity.")
+        self._empty_reads += 1
+        if self._empty_reads < max(1, int(self.empty_read_reconnect_threshold)):
+            logger.warning(
+                "Camera returned no frame; waiting before reconnect | empty_reads=%s/%s",
+                self._empty_reads,
+                self.empty_read_reconnect_threshold,
+            )
+            return None
 
-    else:
-      self._cap = cv2.VideoCapture(self.source)
-      logger.info("Opening video source: %s", self.source)
-      if not self._cap.isOpened():
-        raise RuntimeError(f"Cannot open video source: {self.source}")
-          
+        logger.warning("Reconnect triggered...")
+        self._empty_reads = 0
+        self.close()
+        cfg = self.camera_cfg.reconnect if self.camera_cfg and self.camera_cfg.reconnect else None
+        max_retries = cfg.max_retries if cfg else self.max_retries
+        sleep_s = cfg.sleep_s if cfg else self.reconnect_sleep_s
+        for attempt in range(max_retries):
+            try:
+                time.sleep(sleep_s)
+                logger.info("Reconnect attempt %s/%s", attempt + 1, max_retries)
+                self.open()
+                logger.info("Reconnect successful")
+                return None
+            except Exception as exc:
+                logger.error("Reconnect attempt %s failed: %s", attempt + 1, exc)
+        logger.critical("Camera reconnect failed after all attempts")
+        return None
 
-    try:
-      fps = self._cap.get(cv2.CAP_PROP_FPS)
-      w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-      h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-      frames = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
-      logger.info("Capture opened | fps=%.2f | size=%dx%d | frame_count=%s", fps, w, h, frames if frames > 0 else "?")
-    except Exception:
-      logger.debug("Could not read capture properties", exc_info=True)
+    def apply_profile(self, profile: CameraProfileCfg | None) -> None:
+        if self._client is not None and hasattr(self._client, "apply_profile"):
+            self._client.apply_profile(profile)
 
-    # Warmup (single place to avoid skipping extra frames)
-    for _ in range(max(0, int(self.warmup_frames))):
-      self._cap.read()
+    def apply_camera_controls(self, *, auto_exposure: bool, auto_gain: bool) -> None:
+        if self._client is not None and hasattr(self._client, "apply_camera_controls"):
+            self._client.apply_camera_controls(
+                auto_exposure=auto_exposure,
+                auto_gain=auto_gain,
+            )
 
-  def read(self) -> Tuple[np.ndarray, float] | None:
-    """
-    Reads a frame from the capture source.
-    Returns (frame, timestamp) or None if failed.
-    """
-    if self._cap is None:
-      self.open()
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
-    ok, frame = self._cap.read()
-    if ok and frame is not None:
-      return frame, time.time()
-    
-    # Try reconnect
-    #TODO: Code duplication? Run retries in a loop?
-    logger.warning("Capture read failed; reconnecting | source=%s", self.source)
-    self.close()
-    time.sleep(self.reconnect_sleep_s)
-    self.open()
-    ok, frame = self._cap.read()
-    if ok and frame is not None:
-      return frame, time.time()
-    logger.error("Capture read failed after reconnect | source=%s", self.source)
-    return None
-  
-  def close(self) -> None:
-    """
-    Closes the video capture if it is open.
-    """
-    if self._cap is not None:
-      logger.info("Closing video capture")
-      self._cap.release()
-      self._cap = None
+    def is_open(self) -> bool:
+        return bool(self._client is not None and self._client.is_open())
+
+    def get_metadata(self) -> dict:
+        if self._client is None:
+            return {"camera_type": resolve_camera_type(self.camera_cfg, self.source), "source": self.source}
+        return self._client.get_metadata()

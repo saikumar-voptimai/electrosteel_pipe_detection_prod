@@ -2,122 +2,286 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from pathlib import Path
 import logging
-
+from utils.config import HistoryCfg
 import cv2
 import numpy as np
-
-from geometry.roi import ROIManager
+from utils.timing import TimeUtils
+from geometry.roi import ROIManager, PolygonROI
 from vision.types import TrackDet
+from utils.roi_names import RoiName
+
 
 logger = logging.getLogger(__name__)
 
-from datetime import datetime
-import pytz
 
-IST = pytz.timezone("Asia/Kolkata")
+def draw_text_bottom_right(
+    img: np.ndarray,
+    text: str,
+    font=cv2.FONT_HERSHEY_SIMPLEX,
+    font_scale: float = 1.5,
+    thickness: int = 2,
+    margin: int = 20,
+    color: Tuple[int, int, int] = (255, 255, 255),
+) -> None:
+    """
+    Draw text anchored to the bottom-right corner, safely inside the frame.
+    """
+    h, w = img.shape[:2]
 
-def ist_now_str(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=IST).strftime("%Y-%m-%d %H:%M:%S")
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+
+    x = max(margin, w - text_w - margin)
+    y = max(text_h + margin, h - margin)
+
+    cv2.putText(
+        img,
+        text,
+        (x, y),
+        font,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
 def scale_polygon(points, sx, sy):
     return [(int(x * sx), int(y * sy)) for (x, y) in points]
 
-def draw_overlay(frame: np.ndarray, 
-                 rois: ROIManager, 
-                 dets: List[TrackDet], 
-                 ts: float,
-                 scale_x: float = 1.0,
-                 scale_y: float = 1.0) -> np.ndarray:
-  """
-  Draw ROIs and tracking boxes on the frame.
-  """
-  out = frame.copy()
+def draw_overlay(
+    frame_vis: np.ndarray,
+    rois: ROIManager,
+    dets_vis: List[TrackDet],
+    ts: float,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    gate_metrics: Dict = None,
+    debug: bool = False,
+    runfps: float = 0.0,
+) -> np.ndarray:
+    """
+    Draw ROIs and tracking boxes on the frame.
+    The frame is resized frame_viz using publish_imgsz.
+    dets are also dets_vis hence, we take the scaling factors to map ROIs correctly.
+    """
+    out = frame_vis.copy()
 
-  # Draw key ROIs - Only for testing/debugging
-  #TODO: Use Enums or constants for ROI names
-  for name in [
-    "roi_loadcell",
-    "roi_caster5_origin",
-  ]:
-    if name not in rois.rois:
-      continue
-    pts_orig = rois.rois[name]
-    pts_scaled = scale_polygon(pts_orig, scale_x, scale_y)
-    
-    pts_np = np.array(pts_scaled, dtype=np.int32)
-    cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)
-    cv2.putText(out, name, (int(pts_np[0][0])+5, int(pts_np[0][1])+5), 
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.4, (0,255,255), 1)
-  
-  cv2.putText(
-    out,
-    ist_now_str(ts),
-    (int(0.5 * out.shape[1]), int(0.9 * out.shape[0])),
-    cv2.FONT_HERSHEY_SIMPLEX,
-    0.5,
-    (255, 255, 255),
-    1,
-  )
+    # Precompute scaled ROIs for checks in visualization coordinates.
+    rois_scaled: Dict[str, PolygonROI] = {
+        k: PolygonROI(k, scale_polygon(v, scale_x, scale_y))
+        for k, v in rois.rois.items()
+    }
 
-  # Draw Detections/Tracks
-  for d in dets:
-    x1, y1, x2, y2 = map(int, [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2])
-    color = (0, 255, 0) if d.cls_name == "pipe" else (255, 0, 0)
-    cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-    tid = d.track_id if d.track_id is not None else -1
-    cv2.putText(out, 
-                f"{d.cls_name}:{tid} {d.conf:.2f}", 
-                (x1, max(20, y1-5)),
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.5, 
-                color, 
-                2)
-  return out
+    # Draw key ROIs - Only for testing/debugging
+    for roi in (
+        RoiName.LOADCELL,
+        RoiName.CASTER_ORIGIN,
+        RoiName.PIPE_CHECKPOINT,
+        RoiName.GATE1_OPEN,
+        RoiName.GATE2_OPEN,
+        RoiName.RIGHT_ORIGIN,
+    ):
+        name = roi.value
 
+        if name not in rois.rois:
+            continue
+        if not debug:
+            logger.debug("Skipping ROI drawing since debug=False | roi=%s", name)
+            continue
+        pts_orig = rois.rois[name]
+        pts_scaled = scale_polygon(pts_orig, scale_x, scale_y)
+        roi_polygon_scaled = rois_scaled[name]
+
+        pts_np = np.array(pts_scaled, dtype=np.int32)
+        cv2.polylines(out, [pts_np], True, (0, 255, 255), 2)  # ROI in yellow
+        (cx, cy) = roi_polygon_scaled.centroid()
+        cv2.circle(
+            out, (int(cx), int(cy)), radius=5, color=(0, 255, 255), thickness=-1
+        )  # Centroid in yellow
+        cv2.putText(
+            out,
+            name,
+            (int(pts_np[0][0]) + 20, int(pts_np[0][1]) + 5),  # ROI name
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 255),
+            2,
+        )
+
+    time_utils = TimeUtils()  # default Asia/Kolkata
+    dt = time_utils.from_timestamp(ts)
+    status_text = f"{runfps:.2f} FPS | {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+    draw_text_bottom_right(
+        out,
+        status_text,
+        font_scale=1.5,
+        thickness=2,
+        margin=20,
+    )
+    loadcell = rois_scaled.get(RoiName.LOADCELL.value)
+    left_origin = rois_scaled.get(RoiName.LEFT_ORIGIN.value)
+    right_origin = rois_scaled.get(RoiName.RIGHT_ORIGIN.value)
+
+    # Draw Detections/Tracks
+    for d in dets_vis:
+        x1, y1, x2, y2 = map(int, [d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2])
+        color = (255, 0, 0)
+        # Change pipe bbox color if in loadcell ROI
+        if d.cls_name == "pipe":
+            cx, cy = d.bbox.centroid()
+            if loadcell is not None and loadcell.contains(cx, cy):
+                color = (0, 0, 255)  # Red if in loadcell ROI
+            else:
+                color = (0, 255, 0)  # Green for the pipe
+        # Stop rendering pipe bbox if it is in roi_left_origin or roi_right_origin
+        if d.cls_name == "pipe":
+            cx, cy = d.bbox.centroid()
+            if left_origin and left_origin.contains(cx, cy):
+                continue
+            if right_origin and right_origin.contains(cx, cy):
+                continue
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+        tid = d.track_id if d.track_id is not None else -1
+        cv2.putText(
+            out,
+            f"{d.cls_name}:{tid} {d.conf:.2f}",
+            (x1, max(20, y1 - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.5,
+            color,
+            2,
+        )
+        cx, cy = d.bbox.centroid()
+        cv2.circle(out, (int(cx), int(cy)), radius=5, color=color, thickness=-1)
+
+        if d.cls_name in ("gate1", "gate2") and gate_metrics is not None and not debug:
+            m = gate_metrics.get(d.cls_name) if isinstance(gate_metrics, dict) else None
+            if isinstance(m, dict) and m:
+                metrics_str = ", ".join([f"{k}:{float(v):.2f}" for k, v in m.items()])
+                cv2.putText(
+                    out,
+                    f"Metrics: {metrics_str}",
+                    (x1, min(out.shape[0] - 10, y2 + 25)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    2,
+                )
+    return out
+
+
+def _format_detections_txt(
+    ts: float,
+    dets: List[TrackDet],
+    frame_shape: tuple[int, int],
+    class_name_to_id: Dict[str, int],
+) -> str:
+    h, w = frame_shape
+    def yolo_line(d):
+        cid = class_name_to_id.get(d.cls_name)
+        if cid is None:
+            return None
+        x1 = max(0, min(w, d.bbox.x1))
+        y1 = max(0, min(h, d.bbox.y1))
+        x2 = max(0, min(w, d.bbox.x2))
+        y2 = max(0, min(h, d.bbox.y2))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        xc = ((x1 + x2) * 0.5) / w
+        yc = ((y1 + y2) * 0.5) / h
+        bw = (x2 - x1) / w
+        bh = (y2 - y1) / h
+        return f"{cid} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"
+    lines = [line for d in dets if (line := yolo_line(d)) is not None]
+    return "\n".join(lines) + "\n"
 
 @dataclass
 class LatestFramePublisher:
-  """
-  Overlay latest tracking results onto frames.
-  """
-  out_path: str
-  fps: int = 5
-  _last: float = 0.0
+    out_path: str
+    fps: int
+    history_cfg: HistoryCfg | None
+    class_name_to_id: Dict[str, int]
+    _last: float = 0.0
 
-  def publish(self, frame_bgr: np.ndarray) -> None:
-    """
-    Save the latest frame to out_path at limited fps.
-    """
-    if self.fps <= 0:
-      return
+    def publish(
+        self,
+        frame_bgr: np.ndarray,
+        dets: List[TrackDet] | None = None,
+        ts: float | None = None,
+        gate_metrics: Dict | None = None,
+    ) -> None:
+        if (
+            self.fps <= 0
+            or frame_bgr is None
+            or not isinstance(frame_bgr, np.ndarray)
+            or frame_bgr.size == 0
+        ):
+            return
 
-    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
-      logger.debug("Skipping publish: empty frame")
-      return
+        now = time.time()
+        if now - self._last < 1.0 / float(self.fps):
+            return
+        self._last = now
 
-    now = time.time()
-    if now - self._last < 1.0 / float(self.fps):
-      return
-    self._last = now
+        project_root = Path(__file__).parent.parent.parent
+        latest = project_root / self.out_path
+        latest.parent.mkdir(parents=True, exist_ok=True)
 
-    #
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
-    out_full_path = PROJECT_ROOT / self.out_path
-    os.makedirs(out_full_path.parent, exist_ok=True)
-    tmp_path = out_full_path.with_name(out_full_path.stem + "_new.jpg")
+        ok, enc = cv2.imencode(".jpg", frame_bgr)
+        if not ok:
+            logger.warning("Frame encode failed")
+            return
+        data = enc.tobytes()
+        # ---- latest.jpg (UI, best effort) ----
+        try:
+            tmp = latest.with_name(f"{latest.stem}.{os.getpid()}.tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, latest)
+        except Exception:
+            logger.debug("latest.jpg locked, skipping")
+        cfg = self.history_cfg
+        # ---- history save (absolute OR relative path) ----
+        if not cfg or not cfg.enabled:
+            return
 
-    ok = cv2.imwrite(str(tmp_path), frame_bgr)
-    if not ok:
-      logger.warning("Failed to write latest frame | tmp=%s", tmp_path)
-      return
+        try:
+            time_utils = TimeUtils(cfg.timezone)
+            dt = time_utils.from_timestamp(now)
 
-    # Atomic replace
-    try:
-      os.replace(str(tmp_path), str(out_full_path))
-      logger.debug("Published latest frame | path=%s", out_full_path)
-    except Exception:
-      logger.exception("Failed to replace latest frame | tmp=%s -> out=%s", tmp_path, out_full_path)
+            base_dir = Path(cfg.base_dir)
+            if not base_dir.is_absolute():
+                base_dir = project_root / base_dir
+
+            shift = time_utils.resolve_shift(dt, cfg.shifts or [])
+            date_fmt = cfg.date_folder_format
+
+            date_dir = base_dir / dt.strftime(date_fmt)
+
+            time_fmt = cfg.time_filename_format
+            ts_str = dt.strftime(time_fmt)
+            if "%f" in time_fmt:
+                ts_str = ts_str[:-3]
+
+            fname = f"{cfg.prefix}_" f"{ts_str}." f"{cfg.ext}"
+
+            img_dir = date_dir / f"{shift}_img"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            (img_dir / fname).write_bytes(data)
+
+            # Save detection metadata as .txt alongside the image
+            if dets is not None:
+                txt_dir = date_dir / f"{shift}_text"
+                txt_dir.mkdir(parents=True, exist_ok=True)
+                txt_fname = f"{cfg.prefix}_" f"{ts_str}." "txt"
+                txt_content = _format_detections_txt(
+                    ts=ts if ts is not None else now,
+                    dets=dets,
+                    frame_shape=frame_bgr.shape[:2],  # (h, w)
+                    class_name_to_id=self.class_name_to_id,
+                )
+                (txt_dir / txt_fname).write_text(txt_content, encoding="utf-8")
+
+        except Exception:
+            logger.exception("History image save failed (ignored)")

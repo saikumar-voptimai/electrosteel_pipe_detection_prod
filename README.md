@@ -1,167 +1,452 @@
+# Electrosteel Pipe Detection
 
-# Pipe Detect (Production Model)
+Production pipe detection and tracking for one or more caster lines. The app runs YOLO + ByteTrack on a live camera or video file, applies ROI-based business logic for origin, loadcell, and gate events, writes results to caster-specific SQLite databases, and publishes the latest annotated frame for the dashboard.
 
-Runs YOLO + ByteTrack on a live camera feed (or a video file), detects/ tracks pipes, applies ROI-based business logic (origin, loadcell, gate), writes results to a local SQLite database, and publishes a continuously-updated annotated frame for a simple dashboard.
+## Overview
 
-Key sizing concepts (kept intentionally separate):
+Each caster is treated as an independent runtime unit:
 
-- **Capture size**: whatever the camera/video provides (or, for GigE, what you request in `config/camera.yaml`). ROIs in `config/rois.yaml` are defined in this coordinate space.
-- **Inference `imgsz`** (in `config/runtime.yaml`): passed to Ultralytics YOLO; YOLO resizes internally for inference but returns boxes back in the original input frame coordinates.
-- **Publish `publish_imgsz`** (in `config/runtime.yaml`): affects only the rendered/published visualization frame (`var/latest.jpg` and the OpenCV window). It does not affect business logic.
+- One caster has one camera.
+- Each caster has its own configuration directory.
+- Each caster writes to its own storage directory under `var/`.
+- Each caster uses its own SQLite database.
+- To run multiple casters, start one app process per caster.
 
-This README is ordered intentionally:
+Example:
 
-1) **How to run on a Raspberry Pi with a real camera**
-2) **How to use the ROI wizard**
-3) **What each part of the codebase does**
+```text
+config/casters/caster_1/
+  camera.yaml
+  bytetrack.yaml
+  plc.yaml
+  rois.yaml
+  runtime.yaml
+  weight.yaml
 
----
+var/caster_1/
+  caster_1_pipes.db
+  latest.jpg
+  pipe_detect.log
+```
 
-## 1) Raspberry Pi: end-to-end setup (camera + model + dashboard)
+The same pattern works for `caster_2`, `caster_3`, and any positive caster id.
 
-### Hardware / OS assumptions
+## Requirements
 
-- Raspberry Pi 4/5 (4GB+ recommended)
-- Raspberry Pi OS (Debian-based)
-- A camera source:
-	- **Recommended / simplest:** a USB UVC camera
-	- **Pi CSI camera module:** works if the camera is exposed as a V4L2 device (`/dev/video0`). See the CSI notes below.
+- Python `>=3.10,<3.11`
+- Linux production host, tested for Jetson/Raspberry Pi style deployments
+- Camera source:
+  - Daheng GigE camera through Aravis/GStreamer, or
+  - Basler camera through pylon/pypylon, or
+  - USB/V4L2 camera such as `/dev/video0`, or
+  - video file for testing
+- YOLO model in `models/yolo/`
+- Optional PLC connection, or `mock` PLC mode for testing
 
-### Install system packages
-
-OpenCV needs system libraries; headless setups also need video backends.
+Install common system packages:
 
 ```bash
 sudo apt update
 sudo apt install -y \
-	python3 \
-	python3-venv \
-	python3-pip \
-	git \
-	libatlas-base-dev \
-	libopenblas-dev \
-	libjpeg-dev \
-	libpng-dev \
-	libv4l-dev \
-	libgl1 \
-	libglib2.0-0
+  python3 \
+  python3-venv \
+  python3-pip \
+  git \
+  libatlas-base-dev \
+  libopenblas-dev \
+  libjpeg-dev \
+  libpng-dev \
+  libv4l-dev \
+  libgl1 \
+  libglib2.0-0
 ```
 
-Notes:
-- If you plan to run **without a monitor** (headless), it is better to avoid UI windows (see “Headless/Service mode” below).
+## Setup
 
-### Get the code and model
+Clone the repository:
 
 ```bash
 git clone https://github.com/saikumar-voptimai/electrosteel_pipe_detection_prod.git
-cd pipe_detect_prod_model
+cd electrosteel_pipe_detection_prod
 ```
 
-Make sure the model file exists:
+Create the Python environment:
 
-- `models/yolo/best_nano_dataset0To5.pt`
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-### Python environment
-
-This project targets **Python 3.11** (see `pyproject.toml`).
-#### Option: use uv
-
-If you prefer `uv` (fast installs):
+Or with `uv`:
 
 ```bash
 python3 -m pip install -U uv
 uv venv
 uv pip install -r requirements.txt
+source .venv/bin/activate
 ```
 
-### Configure the runtime for a camera
+Confirm that the configured model exists. The current runtime configs use:
 
-Edit `config/runtime.yaml`:
-
-- `video_source`: can be
-	- `0` (first camera)
-	- `1` (second camera)
-	- `/dev/video0` (explicit V4L2 device)
-	- a path to a video file
-
-Example for a USB camera:
-
-```yaml
-video_source: 0
+```text
+models/yolo/yolo11n_26_16_01.engine
 ```
 
-### Configure Daheng GigE (Aravis/GStreamer)
+## Caster Configuration
 
-If `video_source: "gige"`, camera settings are taken from `config/camera.yaml` (camera name/id, width/height/fps, exposure, gain, auto flags). The GigE pipeline in `src/camera/capture.py` uses these values.
+Use one directory per caster:
 
-Logging controls (already present in `config/runtime.yaml`):
-
-```yaml
-log_level: "INFO"        # set to DEBUG for very verbose logs
-log_path: "var/pipe_detect.log"  # set to null for console-only
+```text
+config/casters/caster_<id>/
+  camera.yaml
+  bytetrack.yaml
+  plc.yaml
+  rois.yaml
+  runtime.yaml
+  weight.yaml
 ```
 
-### Configure PLC mode
+Important files:
 
-Edit `config/plc.yaml`:
+- `runtime.yaml`: video source, model path, inference size, logging, publish FPS, headless mode.
+- `camera.yaml`: camera id/name, width, height, FPS, exposure/gain profiles.
+- `rois.yaml`: ROI polygons for that camera view.
+- `plc.yaml`: PLC mode, event tags, Modbus settings.
+- `bytetrack.yaml`: ByteTrack settings.
+- `weight.yaml`: optional S7 weight capture settings.
 
-- For development/testing on a Pi with no PLC connected, keep:
-	- `mode: "mock"`
-- For Modbus/OpenPLC style wiring, set `mode: "modbus"` and configure `modbus:`.
+For a new caster, copy an existing directory and edit only the hardware-specific values:
 
-### Run the ROI wizard (mandatory first-time step)
+```bash
+cp -r config/casters/caster_1 config/casters/caster_3
+```
 
-You must define ROIs in `config/rois.yaml` for your *actual camera view*.
+Then update:
 
-See the next section for detailed ROI wizard instructions.
+- `config/casters/caster_3/runtime.yaml`
+- `config/casters/caster_3/camera.yaml`
+- `config/casters/caster_3/plc.yaml`
+- `config/casters/caster_3/weight.yaml`, if weight capture is enabled
 
-### Run the main application
+The app also keeps backward compatibility with older flat files like `config/casters/caster_1_config.yaml`, but the directory layout above is the preferred format.
 
-From the repo root:
+## Storage And Database
+
+Storage is resolved dynamically from the caster id.
+
+For `caster_1`:
+
+```text
+var/caster_1/caster_1_pipes.db
+var/caster_1/latest.jpg
+var/caster_1/pipe_detect.log
+var/caster_1/history/
+```
+
+For `caster_2`:
+
+```text
+var/caster_2/caster_2_pipes.db
+var/caster_2/latest.jpg
+var/caster_2/pipe_detect.log
+var/caster_2/history/
+```
+
+You do not need to create these directories manually. They are created when the caster config is loaded.
+
+## How To Run
+
+Activate the environment first:
 
 ```bash
 source .venv/bin/activate
+```
+
+Run caster 1:
+
+```bash
+python src/app.py --caster 1
+```
+
+Equivalent form:
+
+```bash
+python src/app.py --caster caster_1
+```
+
+Run caster 2:
+
+```bash
+python src/app.py --caster 2
+```
+
+Run multiple casters:
+
+```bash
+python scripts/run_all_casters.py --casters 1,2,3,4
+```
+
+The launcher starts one child process per caster. Stop it with `Ctrl+C`; it will terminate the child processes.
+
+`src/main.py` remains as a compatibility wrapper and defaults to caster 1:
+
+```bash
 python src/main.py
 ```
 
-What you should see:
+## First-Time ROI Setup
 
-- A window showing the annotated live feed (if OpenCV GUI is available)
-- A SQLite DB file at `var/pipes.db`
-- A continuously-updated image at `var/latest.jpg` (used by the dashboard)
-- Logs in console and optionally in `var/pipe_detect.log` (depending on `config/runtime.yaml`)
+Each caster needs ROIs drawn for its actual camera view. Run the ROI wizard before production use.
 
-### Run the dashboard
+For caster 1:
 
-In another terminal:
+```bash
+python src/app.py --caster 1 --redraw
+```
+
+For caster 2:
+
+```bash
+python src/app.py --caster 2 --redraw
+```
+
+Override the video source during ROI setup:
+
+```bash
+python src/app.py --caster 1 --redraw --video-source 0
+python src/app.py --caster 1 --redraw --video-source test1.mp4
+```
+
+The wizard saves to:
+
+```text
+config/casters/caster_<id>/rois.yaml
+```
+
+Wizard controls:
+
+- Left click: add a point.
+- `u`: undo last point.
+- `c`: clear current ROI.
+- `Enter`: accept the current ROI after exactly 4 points.
+- `q`: quit without saving.
+
+Required ROIs:
+
+- `roi_loadcell`
+- `roi_caster_origin`
+- `roi_left_origin`
+- `roi_right_origin`
+- `roi_safety_critical`
+- `roi_gate1_closed`
+- `roi_gate1_open`
+- `roi_gate2_closed`
+- `roi_gate2_open`
+
+ROIs are stored in the original capture coordinate space, not the resized inference or publish image size.
+
+## Dashboard
+
+Run the centralized monitoring dashboard:
 
 ```bash
 source .venv/bin/activate
 streamlit run src/ui/dashboard.py
 ```
 
-Dashboard inputs/outputs:
+The sidebar has a `Caster` selector:
 
-- Reads `var/pipes.db`
-- Displays `var/latest.jpg`
+- `All Casters`: shows aggregated production metrics, health for every configured caster, and a camera preview grid.
+- `caster_1`, `caster_2`, ...: switches all metrics, latest frame, recent pipes, logs, and configuration display to that caster.
 
-### Headless / service mode (recommended for production)
+Available casters are discovered dynamically from:
 
-If your Pi will run without a monitor:
+```text
+config/casters/caster_<id>/
+```
 
-- You may want to disable the OpenCV GUI window usage. Right now the app calls `cv2.imshow(...)` in `src/app.py`.
-- A common approach is running under `systemd` and relying on logs + dashboard.
+To open the dashboard with a caster preselected:
 
-Minimal `systemd` example (adjust paths):
+```bash
+PIPE_DASHBOARD_CASTER=caster_1 streamlit run src/ui/dashboard.py
+PIPE_DASHBOARD_CASTER=caster_2 streamlit run src/ui/dashboard.py
+```
+
+The dashboard reads each caster's runtime outputs:
+
+```text
+var/caster_<id>/caster_<id>_pipes.db
+var/caster_<id>/latest.jpg
+var/caster_<id>/pipe_detect.log
+```
+
+For a selected VA Imaging caster, open the `Camera Control` tab to manage its
+scheduled exposure, gain, gamma, auto-exposure, and auto-gain settings. New
+casters start with day/night defaults. Use the table's row controls to add or
+remove any number of custom periods, including overnight periods such as
+`20:00`–`06:00`. The schedule must cover all 24 hours without gaps or overlaps.
+
+Saving updates only that caster's `camera.yaml`. Its independent background
+camera scheduler notices the atomic file change within about two seconds and
+applies the active profile; the inference loop does not poll configuration.
+
+## Camera Configuration
+
+Set the camera source in the caster runtime file:
+
+```yaml
+# config/casters/caster_1/runtime.yaml
+video_source: gige
+```
+
+Common values:
+
+```yaml
+video_source: gige
+video_source: basler
+video_source: 0
+video_source: "/dev/video0"
+video_source: "test1.mp4"
+```
+
+The camera implementation is selected by `camera.type` in:
+
+```text
+config/casters/caster_<id>/camera.yaml
+```
+
+Supported camera types:
+
+- `va_imaging`
+- `basler`
+
+### VA Imaging Example
+
+Use `va_imaging` for the existing Daheng / VA Imaging GigE setup:
+
+```yaml
+camera:
+  type: va_imaging
+  va_imaging:
+    id: "Daheng Imaging-MER2-630-18GC-P-FBJ24120608"
+    width: 2620
+    height: 1216
+    fps: 8
+    reconnect:
+      max_retries: 3
+      sleep_s: 2.0
+    profiles:
+      day:
+        start: "06:00"
+        end: "18:00"
+        exposure_us: 100000
+        gain_db: 5
+        gamma_enable: false
+        gamma: 0.8
+      night:
+        start: "18:00"
+        end: "06:00"
+        exposure_us: 150000
+        gain_db: 12
+        gamma_enable: false
+        gamma: 1.4
+    auto_exposure: false
+    auto_gain: false
+```
+
+Then run:
+
+```bash
+python src/app.py --caster 1
+```
+
+### Basler Example
+
+Use `basler` for Basler cameras through pypylon:
+
+```yaml
+camera:
+  type: basler
+  width: 1920
+  height: 1280
+  fps: 5
+  basler:
+    device_user_id: ""
+    serial_number: ""
+    ip_address: ""
+    exposure_time: null
+    gain: null
+    grab_strategy: latest_image_only
+    timeout_ms: 1000
+    pixel_format: Mono8
+    width: 1920
+    height: 1280
+    offset_x: 0
+    offset_y: 0
+    acquisition_frame_rate: 5
+    packet_size: 1500
+    inter_packet_delay: 1000
+    max_num_buffer: 30
+```
+
+If `serial_number`, `device_user_id`, or `ip_address` is set, the app opens that matching Basler camera. If all are empty, it opens the first available Basler camera.
+
+When Basler and VA Imaging GigE cameras run on the same switch or NIC, do not run the Basler at full sensor size unless the network is designed for it. For example, a 5472 x 3648 Mono8 Basler frame at roughly 5 FPS is about 100 MB/s before the VA camera traffic is added. Use `width`, `height`, `acquisition_frame_rate`, `inter_packet_delay`, and `max_num_buffer` to keep the stream stable. If you change Basler width/height, redraw that caster's ROIs because ROI coordinates are stored in the original camera coordinate space.
+
+Basler setup:
+
+```bash
+python -m pip install pypylon
+```
+
+Install the Basler pylon runtime/SDK on the target machine before using `pypylon`. The Basler dependency is loaded only when `camera.type: basler` is selected, so VA Imaging and video-file modes can still run without `pypylon` installed.
+
+For USB/V4L2 cameras, use an index such as `0` or a device path such as `/dev/video0`.
+
+## PLC Configuration
+
+For development without a PLC:
+
+```yaml
+mode: "mock"
+```
+
+For Modbus:
+
+```yaml
+mode: "modbus"
+```
+
+Each caster pulse tag is resolved dynamically by key:
+
+```yaml
+tags:
+  caster_1_new: "caster_1_new"
+  caster_2_new: "caster_2_new"
+```
+
+If a caster-specific tag is missing and PLC mode is `mock`, the app uses a synthetic mock tag. In real Modbus mode, the tag must also exist under `modbus.coils`.
+
+## Headless Production Service
+
+Set `run_headless: true` in the caster runtime config for production systems without a monitor:
+
+```yaml
+run_headless: true
+```
+
+Example `systemd` service for caster 1:
 
 ```ini
 [Unit]
-Description=Pipe Detect
+Description=Pipe Detection Caster 1
 After=network.target
 
 [Service]
-WorkingDirectory=/home/pi/pipe_detect_prod_model
-ExecStart=/home/pi/pipe_detect_prod_model/.venv/bin/python src/main.py
+WorkingDirectory=/home/pi/electrosteel_pipe_detection_prod
+ExecStart=/home/pi/electrosteel_pipe_detection_prod/.venv/bin/python src/app.py --caster 1
 Restart=always
 RestartSec=2
 
@@ -169,203 +454,114 @@ RestartSec=2
 WantedBy=multi-user.target
 ```
 
----
+For multiple casters, create one service per caster or run the launcher:
 
-## CSI camera module notes (Pi Camera)
+```ini
+ExecStart=/home/pi/electrosteel_pipe_detection_prod/.venv/bin/python scripts/run_all_casters.py --casters 1,2,3,4
+```
 
-This code uses `cv2.VideoCapture(...)`, which works best when the camera is available as a V4L2 device (e.g. `/dev/video0`).
+## Test Video Workflow
 
-If your CSI camera does not show up as `/dev/video*`:
-
-- Ensure the camera is enabled and working with `libcamera-hello`.
-- Consider using `libcamera-v4l2` (if available for your OS) to expose a V4L2 device.
-
-If you can see the camera as `/dev/video0`, set:
+Set a caster runtime source to a video file:
 
 ```yaml
-video_source: "/dev/video0"
+video_source: "test1.mp4"
 ```
 
----
-
-## 2) ROI Wizard: how to use it (roi_wizard)
-
-The ROI wizard is an interactive OpenCV tool that captures a frame and lets you draw a set of required ROIs as **4-point polygons**.
-
-### Launch the wizard
-
-From repo root:
+Then run:
 
 ```bash
-python src/main.py --redraw
+python src/app.py --caster 1
 ```
 
-To use a specific camera index:
+The database persists between runs. To reset caster 1 test data:
 
 ```bash
-python src/main.py --redraw --video-source 0
+rm var/caster_1/caster_1_pipes.db
 ```
 
-To use a video file (useful for ROI setup on test footage):
+## Architecture
+
+Runtime flow:
+
+1. `Capture` reads frames from camera or video.
+2. `YoloByteTrack` runs YOLO + ByteTrack.
+3. `ROIManager` evaluates detections against configured ROIs.
+4. `PipeFlowFSM` detects origin, loadcell enter/exit, stale tracks, and pipe lifecycle.
+5. `GateFSM` detects gate open/close using geometry, PLC, or vision sources.
+6. `SqliteRepo` writes pipe state and event history.
+7. `LatestFramePublisher` writes the current dashboard image.
+
+Main modules:
+
+- `src/app.py`: application lifecycle and runtime orchestration.
+- `src/utils/config.py`: config loading, caster id resolution, storage and DB path helpers.
+- `src/camera/capture.py`: camera/video capture.
+- `src/vision/tracker.py`: YOLO + ByteTrack wrapper.
+- `src/geometry/roi.py`: ROI geometry helpers.
+- `src/logic/pipe_fsm.py`: pipe lifecycle state machine.
+- `src/logic/gate_fsm.py`: gate state machine.
+- `src/db/repo.py`: SQLite schema and queries.
+- `src/ui/dashboard.py`: Streamlit dashboard.
+
+## Validation
+
+Run the available unit tests:
 
 ```bash
-python src/main.py --redraw --video-source tests/videos/va_imaging_test.avi
+python -m unittest discover tests
 ```
 
-Output:
-
-- Saves to `config/rois.yaml` by default (or `--rois <path>` if provided)
-
-### Controls
-
-The wizard window title shows the controls; the important ones:
-
-- **Left click**: add a point (each ROI needs exactly **4 points**)
-- `u`: undo last point
-- `c`: clear current ROI points
-- `ENTER`: accept current ROI (only works when 4 points are selected)
-- `q`: quit without saving (cancels)
-
-### What ROIs are collected (and what they mean)
-
-The wizard collects these ROIs in order (see `src/utils/roi_wizard.py`):
-
-- `roi_loadcell`: “loadcell zone” for triggering the loadcell-enter event
-- `roi_caster5_origin`: where a pipe must appear to be considered originating from caster
-- `roi_left_origin`, `roi_right_origin`: exclusion areas; pipes originating here become `origin='other'`
-- `roi_safety_critical`: used for safety/occlusion logic (e.g., humans near gates)
-- `roi_gate1_closed`, `roi_gate1_open`: reference boxes for gate geometry decision
-- `roi_gate2_closed`, `roi_gate2_open`: reference boxes for gate geometry decision
-
-### Tips for reliable ROIs
-
-- Draw tight rectangles aligned to the physical zones.
-- Keep origin ROIs large enough to “catch” the pipe early, but not so large that unrelated areas are included.
-- The gate “closed” ROI is used as an area baseline, so draw it consistently.
-
----
-
-## 3) Running on a test video (developer workflow)
-
-To run with the bundled test video, set in `config/runtime.yaml`:
-
-```yaml
-video_source: "tests/videos/va_imaging_test.avi"
-```
-
-Then:
+Run only caster config tests:
 
 ```bash
-python src/main.py
+python -m unittest tests.test_caster_config
 ```
 
-Important note about “last hour/8h/24h” metrics:
+Compile-check the main Python files:
 
-- Metrics are computed using wall-clock timestamps (`time.time()`), and the DB (`var/pipes.db`) persists across runs.
-- If you re-run a 5-minute test video multiple times, you are counting data from previous runs unless you delete `var/pipes.db`.
+```bash
+python -m py_compile src/utils/config.py src/app.py src/main.py src/ui/dashboard.py scripts/run_all_casters.py
+```
 
----
+## Troubleshooting
 
-## 4) What parts of the code do what
+No camera frames:
 
-### High-level dataflow
+- Check `video_source` in `config/casters/caster_<id>/runtime.yaml`.
+- For V4L2 cameras, run `ls -l /dev/video*`.
+- For GigE cameras, verify network, camera id, Aravis/GStreamer installation, and camera permissions.
 
-1) **Capture** reads a frame from the camera/video.
-2) **Tracker** runs YOLO + ByteTrack to produce detections with track IDs.
-3) **FSMs** interpret tracks relative to ROIs:
-	 - pipe origin detection
-	 - loadcell enter/exit events
-	 - gate open events (via geometry/PLC/vision)
-4) **DB repo** upserts pipe state and inserts events.
-5) **Overlay** draws ROIs + boxes and publishes `var/latest.jpg`.
-6) **Dashboard** reads the DB and latest image to display status.
+ROI wizard does not open:
 
-### Entry points
+- Run it on a machine with a display.
+- Avoid headless OpenCV builds when using the wizard.
+- Generate `config/casters/caster_<id>/rois.yaml` and copy it to the production host.
 
-- `src/main.py`
-	- `python src/main.py` runs the full app.
-	- `python src/main.py --redraw` runs ROI wizard and writes `config/rois.yaml`.
+Dashboard shows old counts:
 
-### Configuration
+- The SQLite DB persists across runs.
+- Delete the caster DB to reset counts:
 
-- `config/runtime.yaml`
-	- Video source, model path, tracker thresholds, FPS control, DB paths, logging.
-- `config/rois.yaml`
-	- ROI polygons in pixel coordinates.
-- `config/plc.yaml`
-	- PLC mode (mock/modbus/...) and tag names.
+```bash
+rm var/caster_1/caster_1_pipes.db
+```
 
-### Core runtime
+Too much logging:
 
-- `src/app.py`
-	- Orchestrates capture → infer → FSM updates → DB → overlay publishing.
-	- Periodic DB commits.
-	- Gate source can be switched at runtime via DB setting.
+- Set `log_level: "INFO"` in `config/casters/caster_<id>/runtime.yaml`.
+- Set `log_path: null` to log only to console.
 
-### Vision / tracking
+Wrong caster output path:
 
-- `src/vision/tracker.py`
-	- Wrapper around Ultralytics YOLO tracking with ByteTrack.
-	- Produces `TrackDet` entries with `track_id`.
+- Run with an explicit caster id:
 
-- `src/vision/overlay.py`
-	- Draws ROIs and tracking boxes.
-	- Publishes the latest annotated frame as a single JPEG file.
+```bash
+python src/app.py --caster caster_1
+```
 
-### Geometry / ROIs
+- Confirm output under:
 
-- `src/geometry/roi.py`
-	- ROI management and point-in-polygon checks.
-
-- `src/utils/roi_wizard.py`
-	- Interactive ROI drawing wizard.
-
-### Business logic (FSM)
-
-- `src/logic/pipe_fsm.py`
-	- Determines pipe origin (`caster` vs `other`), loadcell enter/exit, and “stale track” cleanup.
-
-- `src/logic/gate_fsm.py`
-	- Debounces gate open/close transitions.
-
-- `src/logic/gate_sources.py`
-	- Gate position sources:
-		- geometry-based (from detections + ROIs)
-		- PLC-based
-		- placeholder for vision-based classifier
-
-### Persistence
-
-- `src/db/repo.py`
-	- SQLite schema and queries:
-		- `pipes` table: last known pipe state + timestamps
-		- `events` table: event log
-		- `settings` table: runtime switch settings (e.g. gate source)
-
-### UI
-
-- `src/ui/dashboard.py`
-	- Streamlit dashboard reading `var/pipes.db` and `var/latest.jpg`.
-
----
-
-## 5) Troubleshooting
-
-### No camera frames / reconnect loop
-
-- Check your `video_source` value in `config/runtime.yaml`.
-- On Linux, verify the device exists: `ls -l /dev/video*`.
-
-### ROI wizard window doesn’t open
-
-- You likely installed a headless OpenCV build or are on a headless machine.
-- Run the wizard on a machine with a display, generate `config/rois.yaml`, then copy it to the Pi.
-
-### Dashboard shows old counts
-
-- The DB persists across runs: delete `var/pipes.db` to reset.
-
-### Too much logging
-
-- Set `log_level: "INFO"` in `config/runtime.yaml`.
-
+```text
+var/caster_1/
+```

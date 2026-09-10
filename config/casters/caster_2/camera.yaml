@@ -1,0 +1,28 @@
+camera:
+  type: va_imaging
+  va_imaging:
+    id: "FBU25100061"
+    ip: "192.168.8.102"
+    width: 2620
+    height: 1216
+    fps: 8
+    reconnect:
+      max_retries: 3
+      sleep_s: 2.0
+    profiles:
+      day:
+        start: "08:00"
+        end: "18:00"
+        exposure_us: 80000
+        gain_db: 10
+        gamma_enable: false
+        gamma: 0.8
+      night:
+        start: "18:00"
+        end: "08:00"
+        exposure_us: 100000
+        gain_db: 12
+        gamma_enable: false
+        gamma: 1.4
+    auto_exposure: false
+    auto_gain: false

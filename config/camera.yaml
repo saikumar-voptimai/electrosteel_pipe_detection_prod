@@ -1,11 +1,30 @@
-# This file sets the Daheng VA-Imaging GigE camera parameters
-# THe camera currently uses GStream and Aravis drivers
+# Daheng / VA Imaging camera configuration.
+# Caster-specific deployments should prefer config/casters/caster_<id>/camera.yaml.
 camera:
-  id: "Daheng Imaging-MER2-630-18GC-P-FBJ24120608"
-  width: 960
-  height: 640 # Match these to the runtime publish_imgsz aspect ratio
-  fps: 8
-  exposure_us: 15000 # 15 ms
-  gain_db: 5         # 0 to 30 dB
-  auto_exposure: false
-  auto_gain: false
+  type: va_imaging
+  va_imaging:
+    id: "FBJ24120608"
+    ip: "192.168.1.123"
+    width: 2620
+    height: 1216
+    fps: 8
+    reconnect:
+      max_retries: 3
+      sleep_s: 2.0
+    profiles:
+      day:
+        start: "06:00"
+        end: "18:00"
+        exposure_us: 100000
+        gain_db: 5
+        gamma_enable: false
+        gamma: 0.8
+      night:
+        start: "18:00"
+        end: "06:00"
+        exposure_us: 150000
+        gain_db: 12
+        gamma_enable: false
+        gamma: 1.4
+    auto_exposure: false
+    auto_gain: false

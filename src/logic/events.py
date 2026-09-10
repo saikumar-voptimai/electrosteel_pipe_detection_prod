@@ -14,6 +14,11 @@ class PipeExitedLoadcellEvent:
   t_exit: float  # Epoch seconds
 
 @dataclass(frozen=True)
+class PipeRemovedBeforeCheckpointEvent:
+  pipe_uid: str
+  reason: str
+
+@dataclass(frozen=True)
 class GateOpenedEvent:
   gate_name: str  # "gate1" | "gate2"
   t_open: float  # Epoch seconds

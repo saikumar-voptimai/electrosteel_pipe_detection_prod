@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 import logging
+from ui.formatting import fmt_ts
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,14 @@ CREATE TABLE IF NOT EXISTS pipes (
   pipe_uid TEXT PRIMARY KEY,
   tracker_id INTEGER,
   origin TEXT,
+  pipe_checkpoint INTEGER DEFAULT 0,
   state TEXT,
   t_origin REAL,
   t_loadcell_enter REAL,
   t_loadcell_exit REAL,
+  weight REAL,
+  weight_quality TEXT,
+  weight_samples INTEGER,
   avg_conf_full REAL,
   conf_count_full INTEGER,
   avg_conf_till_gate REAL,
@@ -41,6 +46,38 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gate_cycles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  t_gate1_open REAL,
+  t_gate2_open REAL,
+  created_at REAL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS gate_openings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  gate_name TEXT NOT NULL,
+  t_open REAL NOT NULL,
+  created_at REAL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS unknown_loadcell_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL NOT NULL,
+  event_type TEXT NOT NULL,
+  tracker_id INTEGER,
+  details TEXT
+);
+
+CREATE TABLE IF NOT EXISTS trolley_gate2_intersections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp REAL NOT NULL,
+  trolley_track_id INTEGER NOT NULL,
+  pipe_on_trolley INTEGER NOT NULL CHECK (pipe_on_trolley IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_trolley_gate2_intersections_timestamp
+ON trolley_gate2_intersections(timestamp);
+
 """
 
 @dataclass
@@ -53,8 +90,28 @@ class SqliteRepo:
                                 timeout=30, 
                                 check_same_thread=False)
     self.conn.executescript(SCHEMA_SQL)
+    # Lightweight schema migration for existing DBs.
+    # `CREATE TABLE IF NOT EXISTS` does not add columns to an existing table.
+    self._ensure_columns(
+      "pipes",
+      {
+        "weight": "REAL",
+        "weight_quality": "TEXT",
+        "weight_samples": "INTEGER",
+        "pipe_checkpoint": "INTEGER DEFAULT 0",
+      },
+    )
     self.conn.commit()
     logger.debug("SQLite schema ensured")
+
+  def _ensure_columns(self, table: str, cols: Dict[str, str]) -> None:
+    cur = self.conn.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cur.fetchall()}  # row[1] = column name
+    for name, typ in cols.items():
+      if name in existing:
+        continue
+      logger.info("SQLite migrate | table=%s add_column=%s %s", table, name, typ)
+      self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
   def close(self) -> None:
     logger.info("Closing sqlite db")
@@ -74,6 +131,10 @@ class SqliteRepo:
     """
     self.conn.execute(sql, tuple(row.values()))
     logger.debug("Upsert pipe | uid=%s | origin=%s | state=%s", row.get("pipe_uid"), row.get("origin"), row.get("state"))
+
+  def delete_pipe(self, pipe_uid: str) -> None:
+    self.conn.execute("DELETE FROM pipes WHERE pipe_uid=?", (pipe_uid,))
+    logger.info("Deleted pipe | uid=%s", pipe_uid)
   
   def insert_event(self, event_type: str, pipe_uid: str | None, details: str = "") -> None:
     """
@@ -84,6 +145,50 @@ class SqliteRepo:
       (time.time(), event_type, pipe_uid, details)
     )
     logger.info("Event inserted | type=%s | pipe_uid=%s | details=%s", event_type, pipe_uid, details)
+
+  def insert_unknown_loadcell_event(
+    self,
+    event_type: str,
+    tracker_id: int | None,
+    details: str = "",
+    ts: float | None = None,
+  ) -> None:
+    """
+    Store loadcell events that do not have a stable pipe UID.
+    """
+    event_ts = time.time() if ts is None else ts
+    self.conn.execute(
+      """
+      INSERT INTO unknown_loadcell_events(ts,event_type,tracker_id,details)
+      VALUES(?,?,?,?)
+      """,
+      (event_ts, event_type, tracker_id, details),
+    )
+    logger.info(
+      "Unknown loadcell event inserted | type=%s | tracker_id=%s | details=%s",
+      event_type,
+      tracker_id,
+      details,
+    )
+
+  def insert_trolley_gate2_intersection(
+    self,
+    timestamp: float,
+    trolley_track_id: int,
+    pipe_on_trolley: bool,
+  ) -> None:
+    self.conn.execute(
+      """
+      INSERT INTO trolley_gate2_intersections(timestamp,trolley_track_id,pipe_on_trolley)
+      VALUES(?,?,?)
+      """,
+      (timestamp, trolley_track_id, 1 if pipe_on_trolley else 0),
+    )
+    logger.info(
+      "Trolley gate2 intersection inserted | track_id=%s | pipe_on_trolley=%s",
+      trolley_track_id,
+      int(pipe_on_trolley),
+    )
   
   def commit(self) -> None:
     logger.debug("DB commit")
@@ -96,13 +201,59 @@ class SqliteRepo:
     """
     cursor = self.conn.execute(
       """
-      SELECT pipe_uid, origin, t_origin, t_loadcell_enter, t_loadcell_exit, 
+      SELECT pipe_uid, origin, pipe_checkpoint, t_origin, t_loadcell_enter, t_loadcell_exit,
+              weight, weight_quality, weight_samples,
              avg_conf_full, avg_conf_till_gate, frames_missing, state, last_seen_ts
       FROM pipes
       ORDER BY COALESCE(t_origin, 0) DESC
       LIMIT ?
       """,
       (limit,)
+    )
+    return cursor.fetchall()
+
+  def fetch_gate_openings(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent gate opening readings.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT gate_name, t_open, created_at
+      FROM gate_openings
+      ORDER BY t_open DESC
+      LIMIT ?
+      """,
+      (limit,),
+    )
+    return cursor.fetchall()
+
+  def fetch_unknown_loadcell_events(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent loadcell events that did not resolve to a pipe UID.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT ts, event_type, tracker_id, details
+      FROM unknown_loadcell_events
+      ORDER BY ts DESC
+      LIMIT ?
+      """,
+      (limit,),
+    )
+    return cursor.fetchall()
+
+  def fetch_trolley_gate2_intersections(self, limit: int = 200) -> List[Tuple]:
+    """
+    Fetch recent trolley intersections with the gate2 closed ROI.
+    """
+    cursor = self.conn.execute(
+      """
+      SELECT id, timestamp, trolley_track_id, pipe_on_trolley
+      FROM trolley_gate2_intersections
+      ORDER BY timestamp DESC
+      LIMIT ?
+      """,
+      (limit,),
     )
     return cursor.fetchall()
   
@@ -155,3 +306,39 @@ class SqliteRepo:
     cur = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,))
     row = cur.fetchone()
     return row[0] if row else default
+  
+  def gate_open(self, gate, ts):
+    if gate not in ("gate1", "gate2"):
+      raise ValueError(f"Unsupported gate name: {gate!r}")
+
+    self.conn.execute(
+      "INSERT INTO gate_openings(gate_name,t_open) VALUES(?,?)",
+      (gate, ts),
+    )
+
+    if gate == "gate1":
+      # Gate 1 starts a new opening-only cycle.
+      self.conn.execute("INSERT INTO gate_cycles (t_gate1_open) VALUES (?)", (ts,))
+      return
+
+    # Gate 2 completes the newest cycle started by gate 1. If startup occurs
+    # mid-cycle, preserve the gate 2 opening as its own row instead of losing it.
+    cur = self.conn.execute(
+      """
+      UPDATE gate_cycles
+      SET t_gate2_open = ?
+      WHERE id = (
+        SELECT id FROM gate_cycles
+        WHERE t_gate1_open IS NOT NULL AND t_gate2_open IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+      )
+      """,
+      (ts,),
+    )
+    if cur.rowcount == 0:
+      self.conn.execute("INSERT INTO gate_cycles (t_gate2_open) VALUES (?)", (ts,))
+
+
+
+     

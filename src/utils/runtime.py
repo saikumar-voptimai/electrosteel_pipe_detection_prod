@@ -1,9 +1,28 @@
 import cv2
 
+from utils.image_mode import BLACK_AND_WHITE_MODE, RGB_MODE, normalize_analysis_image_mode
+
 def resize_for_inference(frame, target_width=960):
-    h, w = frame.shape[:2]
-    if w <= target_width:
+    """
+    Resize an image frame to have the target width, maintaining aspect ratio.
+    If the frame width is already less than or equal to target_width, returns the original frame
+    """
+    h, w = frame.shape[:2]                  # Ex: VA - Imaging --> (w2620, h1216)    
+    if w <= target_width:                   # 1216 < 960? false
         return frame
-    scale = target_width / float(w)
-    new_h = int(h * scale)
-    return cv2.resize(frame, (target_width, new_h), interpolation=cv2.INTER_LINEAR)
+    scale = target_width / float(w)         # scale = 960 / 2620 = 0.366
+    new_h = int(h * scale)                  # new_h = 1216 * 0.366 = 445 - So that aspect ratio is maintained
+    return cv2.resize(frame, (target_width, new_h), interpolation=cv2.INTER_LINEAR) # Resize to (w960, h445)
+
+
+def prepare_analysis_frame(frame, target_width=960, mode=None):
+    frame_scaled = resize_for_inference(frame, target_width=target_width)
+    analysis_mode = normalize_analysis_image_mode(mode)
+
+    if analysis_mode == RGB_MODE:
+        return frame_scaled
+    if analysis_mode == BLACK_AND_WHITE_MODE:
+        gray = cv2.cvtColor(frame_scaled, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    raise ValueError(f"Unsupported normalized analysis_image_mode {analysis_mode!r}")

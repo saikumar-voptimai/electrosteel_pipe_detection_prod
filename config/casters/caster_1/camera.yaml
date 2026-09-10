@@ -1,0 +1,35 @@
+camera:
+  type: va_imaging
+  va_imaging:
+    id: FBJ24120608
+    ip: 192.168.1.123
+    width: 2620
+    height: 1216
+    fps: 8
+    reconnect:
+      max_retries: 3
+      sleep_s: 2.0
+    profiles:
+      shift_a:
+        start: 06:00
+        end: '14:00'
+        exposure_us: 80000
+        gain_db: 10
+        gamma_enable: false
+        gamma: 0.8
+      shift_b:
+        start: '14:00'
+        end: '22:00'
+        exposure_us: 100000
+        gain_db: 12
+        gamma_enable: false
+        gamma: 1.4
+      shift_c:
+        start: '22:00'
+        end: 06:00
+        exposure_us: 100000
+        gain_db: 13
+        gamma_enable: false
+        gamma: 1.5
+    auto_exposure: false
+    auto_gain: false

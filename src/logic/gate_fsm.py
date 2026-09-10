@@ -1,7 +1,7 @@
-# gate open/close debounced transitions
+# Debounced gate opening transitions. Closed state is tracked only to re-arm.
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import time
 import numpy as np
 import logging
@@ -30,15 +30,24 @@ class GateFSM:
     if self.gates is None:
       self.gates = {"gate1": GateStatus(name="gate1"), "gate2": GateStatus(name="gate2")}
   
-  def update(self, frame: np.ndarray | None = None, dets: List[TrackDet] | None = None) -> List[str]:
-    """
-    Returns list of gate open events emitted.
+  def update(
+    self,
+    frame: np.ndarray | None = None,
+    dets: List[TrackDet] | None = None,
+  ) -> Tuple[List[GateOpenedEvent], Dict[str, Dict[str, float]]]:
+    """Update gate states.
+
+    Returns:
+      - events: list of GateOpenedEvent
+      - metrics_by_gate: {"gate1": {..}, "gate2": {..}}
     """
     events: List[GateOpenedEvent] = []
+    metrics_by_gate: Dict[str, Dict[str, float]] = {}
     now = time.time()
 
     for gate_name, gs in self.gates.items():
-      pos = self.source.get_position(gate_name, frame=frame, dets=dets)
+      pos, metrics = self.source.get_position(gate_name, frame=frame, dets=dets)
+      metrics_by_gate[gate_name] = dict(metrics or {})
 
       logger.debug("Gate pos read | gate=%s | pos=%s | stable=%d", gate_name, pos, gs.stable)
 
@@ -51,7 +60,6 @@ class GateFSM:
       if pos == gs.position:
         gs.stable += 1
       else:
-        logger.info("Gate state change | gate=%s | %s -> %s", gate_name, gs.position, pos)
         gs.position = pos
         gs.stable = 1
 
@@ -59,11 +67,12 @@ class GateFSM:
 
       # Emit on stable transition to open
       if gs.position == "open" and gs.stable == self.stable_frames:
-        tag = self.gate_tags.get(gate_name)
-        if self.plc_signal_on_open and tag:
-          self.plc.pulse(tag, self.pulse_ms)
-        events.append(GateOpenedEvent(gate_name=gate_name, t_open=now))
-        logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
-        
+          tag = self.gate_tags.get(gate_name)
+          if self.plc_signal_on_open and tag:
+              self.plc.pulse(tag, self.pulse_ms)
+
+          events.append(GateOpenedEvent(gate_name=gate_name, t_open=now))
+          logger.info("Gate opened (debounced) | gate=%s | ts=%.3f", gate_name, now)
+
       self.gates[gate_name] = gs
-    return events
+    return events, metrics_by_gate

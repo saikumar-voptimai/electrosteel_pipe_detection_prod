@@ -17,7 +17,7 @@ class MockPLCClient(PLCClient):
     """
     logger.info("[MOCK PLC] pulse %s %dms", tag, ms)
     self.state[tag] = True
-    time.sleep(ms/1000.0)
+    # time.sleep(ms/1000.0)
     self.state[tag] = False
 
   def read_bool(self, tag: str) -> bool:
